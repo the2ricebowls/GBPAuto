@@ -4,7 +4,18 @@ from collections import defaultdict
 from collections.abc import Collection
 
 from account_automation_lab.jobs.state import can_transition
-from account_automation_lab.models import JobCreate, JobEvent, JobRecord, JobStatus, utc_now
+from account_automation_lab.models import (
+    BrowserProfile,
+    BrowserProfileUpdate,
+    JobCreate,
+    JobEvent,
+    JobRecord,
+    JobStatus,
+    ProfileGroup,
+    ProfileGroupCreate,
+    ProfileGroupUpdate,
+    utc_now,
+)
 
 
 class InvalidJobTransitionError(RuntimeError):
@@ -15,6 +26,8 @@ class MemoryRepository:
     def __init__(self) -> None:
         self._jobs: dict[str, JobRecord] = {}
         self._events: dict[str, list[JobEvent]] = defaultdict(list)
+        self._profiles: dict[str, BrowserProfile] = {}
+        self._groups: dict[str, ProfileGroup] = {}
 
     async def create_job(self, payload: JobCreate) -> JobRecord:
         job = JobRecord(
@@ -91,3 +104,46 @@ class MemoryRepository:
         if not queued:
             return None
         return await self.update_job_status(queued[0].id, JobStatus.RUNNING, message="Job claimed")
+
+    async def list_profiles(self) -> list[BrowserProfile]:
+        return sorted(self._profiles.values(), key=lambda p: p.created_at)
+
+    async def get_profile(self, profile_id: str) -> BrowserProfile | None:
+        return self._profiles.get(profile_id)
+
+    async def create_profile(self, profile: BrowserProfile) -> BrowserProfile:
+        self._profiles[profile.id] = profile
+        return profile
+
+    async def update_profile(
+        self, profile_id: str, update: BrowserProfileUpdate
+    ) -> BrowserProfile:
+        current = self._profiles[profile_id]
+        changes = update.model_dump(exclude_unset=True)
+        changes["updated_at"] = utc_now()
+        updated = current.model_copy(update=changes)
+        self._profiles[profile_id] = updated
+        return updated
+
+    async def delete_profile(self, profile_id: str) -> None:
+        self._profiles.pop(profile_id, None)
+
+    async def list_profile_groups(self) -> list[ProfileGroup]:
+        return sorted(self._groups.values(), key=lambda g: g.created_at)
+
+    async def create_profile_group(self, payload: ProfileGroupCreate) -> ProfileGroup:
+        group = ProfileGroup(name=payload.name, color=payload.color)
+        self._groups[group.id] = group
+        return group
+
+    async def update_profile_group(
+        self, group_id: str, update: ProfileGroupUpdate
+    ) -> ProfileGroup:
+        current = self._groups[group_id]
+        changes = update.model_dump(exclude_unset=True)
+        updated = current.model_copy(update=changes)
+        self._groups[group_id] = updated
+        return updated
+
+    async def delete_profile_group(self, group_id: str) -> None:
+        self._groups.pop(group_id, None)
