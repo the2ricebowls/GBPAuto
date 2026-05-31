@@ -55,7 +55,9 @@ def test_shared_otp_rows_match_receiver_phone_sender_and_time() -> None:
 def test_default_backend_is_supabase() -> None:
     from account_automation_lab.settings import Settings
 
-    assert Settings().database_backend == "supabase"
+    # Assert the source default directly so a local .env / env var (which pydantic
+    # BaseSettings would otherwise apply) cannot make this test environment-dependent.
+    assert Settings.model_fields["database_backend"].default == "supabase"
 
 
 def test_factory_falls_back_to_memory_when_supabase_unconfigured() -> None:

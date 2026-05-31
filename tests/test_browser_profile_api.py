@@ -140,3 +140,28 @@ def test_group_crud() -> None:
     client.patch(f"/api/profile-groups/{gid}", json={"name": "Facebook"})
     client.delete(f"/api/profile-groups/{gid}")
     assert all(g["id"] != gid for g in client.get("/api/profile-groups").json())
+
+
+def test_browser_profile_view_includes_fingerprint_group_and_status() -> None:
+    repo = MemoryRepository()
+    app = create_app(settings=Settings(), repository=repo, start_runner=False)
+    client = TestClient(app)
+
+    group = client.post("/api/profile-groups", json={"name": "FB"}).json()
+    created = client.post(
+        "/api/browser-profiles",
+        json={
+            "name": "FP view",
+            "group_id": group["id"],
+            "fingerprint": {"platform": "macos", "timezone": "Asia/Ho_Chi_Minh", "seed": 7},
+        },
+    ).json()
+
+    rows = client.get("/api/browser-profiles").json()
+    row = next(r for r in rows if r["id"] == created["id"])
+
+    assert row["group_id"] == group["id"]
+    assert row["status"] == "active"
+    assert row["fingerprint"]["platform"] == "macos"
+    assert row["fingerprint"]["timezone"] == "Asia/Ho_Chi_Minh"
+    assert row["fingerprint"]["seed"] == 7

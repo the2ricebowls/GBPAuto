@@ -424,10 +424,13 @@ async def _browser_profile_view(
     return BrowserProfileView(
         id=profile.id,
         name=profile.name,
+        group_id=profile.group_id,
         sim_id=profile.sim_id,
         site_key=profile.site_key,
         runtime=profile.runtime,
         storage_dir=profile.storage_dir,
+        status=profile.status,
+        fingerprint=profile.fingerprint,
         tags=profile.tags,
         proxy_assigned=assignment is not None,
         proxy=assignment.proxy.masked_proxy if assignment is not None else None,
