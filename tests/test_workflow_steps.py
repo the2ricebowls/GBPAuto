@@ -98,3 +98,58 @@ async def test_wait_for_human_sets_waiting_state_then_resumes() -> None:
     await task
     job2 = await repo.get_job(created.id)
     assert job2 is not None and job2.status == JobStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_get_otp_stores_result_on_context() -> None:
+    from account_automation_lab.workflows.steps import get_otp
+
+    page = FakePage()
+    repo = MemoryRepository()
+    created = await repo.create_job(_make_job_create())
+
+    class FakeOtp:
+        async def wait_for_otp(self, request: Any) -> str:
+            return "123456"
+
+    ctx = WorkflowContext(
+        job_id=created.id,
+        profile_id="p1",
+        page=page,
+        repo=repo,
+        checkpoints=CheckpointRegistry(),
+        otp_provider=FakeOtp(),
+    )
+
+    await get_otp("sim-a", "site_01", sender_hints=("SITE01",))(ctx)
+
+    assert ctx.data["otp"] == "123456"
+
+
+@pytest.mark.asyncio
+async def test_read_from_uses_session_manager_callback() -> None:
+    from account_automation_lab.workflows.steps import read_from
+
+    page = FakePage()
+    repo = MemoryRepository()
+    created = await repo.create_job(_make_job_create())
+
+    class FakeSessionManager:
+        async def get_page(self, profile_id: str) -> Any:
+            return {"profile": profile_id}
+
+    ctx = WorkflowContext(
+        job_id=created.id,
+        profile_id="p1",
+        page=page,
+        repo=repo,
+        checkpoints=CheckpointRegistry(),
+        session_manager=FakeSessionManager(),
+    )
+
+    async def reader(other_page: Any) -> str:
+        profile: str = other_page["profile"]
+        return profile
+
+    await read_from("p2", reader, store_as="other")(ctx)
+    assert ctx.data["other"] == "p2"
