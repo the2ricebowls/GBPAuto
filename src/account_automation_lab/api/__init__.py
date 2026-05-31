@@ -68,6 +68,22 @@ def create_app(
     )
     runner = JobRunner(repository=repo, settings=app_settings)
 
+    async def _page_provider(profile_id: str) -> Any:
+        active = browser_sessions._active.get(profile_id)
+        if active is None:
+            opened = await browser_sessions.open_profile(profile_id)
+            active = browser_sessions._active.get(opened.profile_id)
+        context = active.context if active is not None else None
+        if context is None:
+            return None
+        pages = getattr(context, "pages", None)
+        if pages:
+            return pages[0]
+        new_page = getattr(context, "new_page", None)
+        return await new_page() if new_page is not None else None
+
+    runner.set_page_provider(_page_provider)
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if start_runner:
@@ -332,6 +348,7 @@ def create_app(
                 status_code=409,
                 detail=f"Cannot cancel a job in status {job.status.value}",
             )
+        runner.cancel_checkpoint(job_id)
         try:
             return await repo.update_job_status(
                 job_id,
@@ -341,6 +358,35 @@ def create_app(
             )
         except InvalidJobTransitionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/jobs/{job_id}/resume")
+    async def resume_job(job_id: str) -> dict[str, str | bool]:
+        job = await repo.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        runner.resume(job_id)
+        return {"resumed": True, "job_id": job_id}
+
+    @app.post("/api/jobs/{job_id}/pause")
+    async def pause_job(job_id: str) -> dict[str, str | bool]:
+        job = await repo.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job.status == JobStatus.RUNNING:
+            await repo.update_job_status(
+                job_id,
+                JobStatus.WAITING_HUMAN,
+                event_type="job.paused",
+                message="Paused by operator",
+            )
+        return {"paused": True, "job_id": job_id}
+
+    @app.get("/api/jobs/{job_id}/checkpoint")
+    async def get_job_checkpoint(job_id: str) -> dict[str, Any]:
+        checkpoint = runner.checkpoints.current(job_id)
+        if checkpoint is None:
+            return {"checkpoint": None}
+        return {"checkpoint": {"kind": checkpoint.kind, "message": checkpoint.message}}
 
     return app
 
