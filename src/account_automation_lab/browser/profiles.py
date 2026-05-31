@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
+import uuid as _uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -12,12 +13,15 @@ from account_automation_lab.browser.runtime import BrowserProfileConfig, runtime
 from account_automation_lab.models import (
     BrowserProfile,
     BrowserProfileCreate,
+    BrowserProfileUpdate,
     BrowserSession,
     BrowserSessionStatus,
     utc_now,
 )
 from account_automation_lab.profiles import ProfileLockHandle, ProfileLockRegistry
 from account_automation_lab.proxy import ProfileProxyManager
+from account_automation_lab.repositories.base import AutomationRepository
+from account_automation_lab.repositories.memory import MemoryRepository
 from account_automation_lab.settings import Settings
 
 
@@ -34,62 +38,95 @@ class BrowserSessionError(RuntimeError):
 
 
 class BrowserProfileStore:
-    def __init__(self, *, storage_root: Path, site_keys: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        *,
+        storage_root: Path,
+        repository: AutomationRepository | None = None,
+        site_keys: tuple[str, ...] = (),
+    ) -> None:
         self.storage_root = storage_root
         self.storage_root.mkdir(parents=True, exist_ok=True)
-        self._profiles: dict[str, BrowserProfile] = {}
+        self.repository: AutomationRepository = repository or MemoryRepository()
         for site_key in site_keys:
-            profile_id = f"sim-a:{site_key}"
-            self._profiles[profile_id] = self._build_profile(
-                BrowserProfileCreate(
-                    id=profile_id,
-                    name=f"SIM A / {site_key}",
-                    sim_id="sim-a",
-                    site_key=site_key,
-                )
-            )
+            self._seed_default(site_key)
+
+    def _seed_default(self, site_key: str) -> None:
+        profile_id = f"sim-a:{site_key}"
+        storage_dir = self._ensure_storage_dir(profile_id)
+        profile = BrowserProfile(
+            id=profile_id,
+            name=f"SIM A / {site_key}",
+            sim_id="sim-a",
+            site_key=site_key,
+            storage_dir=str(storage_dir),
+        )
+        if isinstance(self.repository, MemoryRepository):
+            self.repository._profiles[profile_id] = profile  # noqa: SLF001
 
     async def list_profiles(self) -> list[BrowserProfile]:
-        return sorted(self._profiles.values(), key=lambda profile: profile.id)
+        return await self.repository.list_profiles()
 
     async def get_profile(self, profile_id: str) -> BrowserProfile | None:
-        return self._profiles.get(profile_id)
+        return await self.repository.get_profile(profile_id)
 
     async def create_profile(self, payload: BrowserProfileCreate) -> BrowserProfile:
-        profile = self._build_profile(payload)
-        if profile.id in self._profiles:
-            raise BrowserProfileExistsError(f"Browser profile {profile.id} already exists")
-        self._profiles[profile.id] = profile
-        return profile
-
-    def _build_profile(self, payload: BrowserProfileCreate) -> BrowserProfile:
-        profile_id = payload.id or f"{payload.sim_id}:{payload.site_key}"
-        storage_dir = self._storage_dir_for(profile_id)
-        storage_dir.mkdir(parents=True, exist_ok=True)
-        return BrowserProfile(
+        profile_id = payload.id or str(_uuid.uuid4())
+        if await self.repository.get_profile(profile_id) is not None:
+            raise BrowserProfileExistsError(f"Browser profile {profile_id} already exists")
+        storage_dir = self._ensure_storage_dir(profile_id)
+        profile = BrowserProfile(
             id=profile_id,
-            name=payload.name or f"{payload.sim_id} / {payload.site_key}",
+            name=payload.name,
+            group_id=payload.group_id,
+            tags=payload.tags,
+            notes=payload.notes,
             sim_id=payload.sim_id,
             site_key=payload.site_key,
             runtime=payload.runtime,
             storage_dir=str(storage_dir),
-            tags=payload.tags,
-            notes=payload.notes,
+            startup_url=payload.startup_url,
+            fingerprint=payload.fingerprint,
         )
+        return await self.repository.create_profile(profile)
 
-    def _storage_dir_for(self, profile_id: str) -> Path:
-        base_name = _path_safe_profile_id(profile_id)
-        storage_dir = self.storage_root / base_name
-        if not self._storage_dir_is_used_by_other_profile(storage_dir, profile_id):
-            return storage_dir
-        suffix = sha256(profile_id.encode("utf-8")).hexdigest()[:12]
-        return self.storage_root / f"{base_name}-{suffix}"
+    async def update_profile(
+        self, profile_id: str, update: BrowserProfileUpdate
+    ) -> BrowserProfile:
+        return await self.repository.update_profile(profile_id, update)
 
-    def _storage_dir_is_used_by_other_profile(self, storage_dir: Path, profile_id: str) -> bool:
-        return any(
-            Path(profile.storage_dir) == storage_dir and profile.id != profile_id
-            for profile in self._profiles.values()
+    async def clone_profile(self, profile_id: str) -> BrowserProfile:
+        source = await self.repository.get_profile(profile_id)
+        if source is None:
+            raise KeyError(profile_id)
+        new_id = str(_uuid.uuid4())
+        storage_dir = self._ensure_storage_dir(new_id)
+        cloned_fp = source.fingerprint.model_copy(update={"seed": None})
+        profile = BrowserProfile(
+            id=new_id,
+            name=f"{source.name} (copy)",
+            group_id=source.group_id,
+            tags=list(source.tags),
+            notes=source.notes,
+            sim_id=source.sim_id,
+            site_key=source.site_key,
+            runtime=source.runtime,
+            storage_dir=str(storage_dir),
+            startup_url=source.startup_url,
+            fingerprint=cloned_fp,
         )
+        return await self.repository.create_profile(profile)
+
+    async def delete_profile(self, profile_id: str, *, remove_storage: bool = False) -> None:
+        profile = await self.repository.get_profile(profile_id)
+        await self.repository.delete_profile(profile_id)
+        if remove_storage and profile is not None:
+            shutil.rmtree(Path(profile.storage_dir), ignore_errors=True)
+
+    def _ensure_storage_dir(self, profile_id: str) -> Path:
+        storage_dir = self.storage_root / _path_safe_profile_id(profile_id)
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        return storage_dir
 
 
 @dataclass

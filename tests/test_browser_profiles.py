@@ -10,8 +10,14 @@ from account_automation_lab.browser.profiles import (
     BrowserProfileStore,
     BrowserSessionManager,
 )
-from account_automation_lab.models import BrowserProfileCreate, ProxyPolicy, RuntimeKind
+from account_automation_lab.models import (
+    BrowserProfileCreate,
+    BrowserProfileUpdate,
+    ProxyPolicy,
+    RuntimeKind,
+)
 from account_automation_lab.proxy import ProfileProxyManager, ProxyVNLease
+from account_automation_lab.repositories.memory import MemoryRepository
 from account_automation_lab.settings import Settings
 
 
@@ -68,32 +74,64 @@ async def test_browser_profile_store_creates_custom_profile(tmp_path: Path) -> N
         )
     )
 
-    assert profile.id == "sim-b:site_03"
+    assert profile.id  # uuid generated
     assert profile.name == "SIM B internal site"
+    assert profile.sim_id == "sim-b"
+    assert profile.site_key == "site_03"
     assert profile.runtime == RuntimeKind.CLOAKBROWSER
     assert profile.tags == ["qa", "otp"]
+    assert await store.get_profile(profile.id) is not None
 
 
 @pytest.mark.asyncio
-async def test_browser_profile_store_uses_distinct_path_safe_dirs_for_sanitized_collisions(
-    tmp_path: Path,
-) -> None:
-    store = BrowserProfileStore(storage_root=tmp_path, site_keys=())
+async def test_store_create_persists_and_builds_storage_dir(tmp_path: Path) -> None:
+    repo = MemoryRepository()
+    store = BrowserProfileStore(storage_root=tmp_path, repository=repo)
 
-    colon_profile = await store.create_profile(
-        BrowserProfileCreate(id="a:b", name="Colon", sim_id="a", site_key="b")
-    )
-    slash_profile = await store.create_profile(
-        BrowserProfileCreate(id="a/b", name="Slash", sim_id="a", site_key="b")
-    )
+    profile = await store.create_profile(BrowserProfileCreate(name="My FB"))
 
-    colon_dir = Path(colon_profile.storage_dir)
-    slash_dir = Path(slash_profile.storage_dir)
-    assert colon_dir != slash_dir
-    assert colon_dir.parent == tmp_path
-    assert slash_dir.parent == tmp_path
-    assert ":" not in colon_dir.name
-    assert "/" not in slash_dir.name
+    assert profile.id
+    assert profile.name == "My FB"
+    assert (tmp_path / profile.id).exists()
+    assert await repo.get_profile(profile.id) is not None
+
+
+@pytest.mark.asyncio
+async def test_store_update_profile(tmp_path: Path) -> None:
+    repo = MemoryRepository()
+    store = BrowserProfileStore(storage_root=tmp_path, repository=repo)
+    profile = await store.create_profile(BrowserProfileCreate(name="A"))
+
+    updated = await store.update_profile(profile.id, BrowserProfileUpdate(name="B"))
+
+    assert updated.name == "B"
+
+
+@pytest.mark.asyncio
+async def test_store_clone_makes_new_id_and_dir_and_random_seed(tmp_path: Path) -> None:
+    repo = MemoryRepository()
+    store = BrowserProfileStore(storage_root=tmp_path, repository=repo)
+    original = await store.create_profile(BrowserProfileCreate(name="Orig"))
+
+    clone = await store.clone_profile(original.id)
+
+    assert clone.id != original.id
+    assert clone.name.startswith("Orig")
+    assert clone.storage_dir != original.storage_dir
+    assert (tmp_path / clone.id).exists()
+
+
+@pytest.mark.asyncio
+async def test_store_delete_removes_record_and_optionally_dir(tmp_path: Path) -> None:
+    repo = MemoryRepository()
+    store = BrowserProfileStore(storage_root=tmp_path, repository=repo)
+    profile = await store.create_profile(BrowserProfileCreate(name="X"))
+    storage_dir = tmp_path / profile.id
+
+    await store.delete_profile(profile.id, remove_storage=True)
+
+    assert await repo.get_profile(profile.id) is None
+    assert not storage_dir.exists()
 
 
 @pytest.mark.asyncio
