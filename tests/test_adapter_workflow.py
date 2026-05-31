@@ -24,7 +24,7 @@ class FakePage:
 
 @pytest.mark.asyncio
 async def test_mock_adapter_workflow_returns_runnable_steps() -> None:
-    adapter = adapter_for("site_01")
+    adapter = adapter_for("example")
     repo = MemoryRepository()
     ctx = WorkflowContext(
         job_id="job1",

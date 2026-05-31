@@ -7,7 +7,9 @@ This project implements the approved MVP plan:
 - One shared Supabase schema for SMS Forwarder + Account Automation Lab (Supabase is the default backend), plus a memory backend fallback for local development and tests.
 - APScheduler plus `asyncio.Queue` job runner with global and per-site concurrency limits.
 - A step-based workflow engine for site adapters, with a `WAITING_HUMAN` state and operator resume/pause/cancel controls.
-- Ten separate site adapter modules with mock-safe defaults.
+- One worked `example` site adapter (clone it to add real sites); sites are
+  otherwise editable data records managed via UI/API, with a generic fallback
+  workflow for data-only sites.
 - SIM OTP, shared `otp_messages` fallback, ProxyVN profile-proxy manager, and CAPTCHA provider abstractions with provider-backed modes disabled by default.
 - AdsPower-style profile cockpit for managing uuid-keyed, persisted browser profiles (groups, tags, fingerprint) and opening/stopping CloakBrowser sessions from the web UI.
 

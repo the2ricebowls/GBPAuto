@@ -7,13 +7,13 @@ from account_automation_lab.repositories.memory import MemoryRepository
 from account_automation_lab.settings import Settings
 
 
-def test_adapter_registry_loads_ten_allowlisted_mock_adapters() -> None:
+def test_adapter_registry_loads_only_the_example_code_adapter() -> None:
     adapters = load_adapters()
 
-    assert len(adapters) == 10
-    assert adapter_for("site_01").spec.key == "site_01"
-    assert adapter_for("site_01").spec.is_url_allowed("http://localhost:8080/mock/site_01")
-    assert not adapter_for("site_01").spec.is_url_allowed("https://example.com/signup")
+    assert list(adapters) == ["example"]
+    assert adapter_for("example").spec.key == "example"
+    assert adapter_for("example").spec.is_url_allowed("http://localhost:8080/mock/example")
+    assert not adapter_for("example").spec.is_url_allowed("https://example-real.com/signup")
 
 
 def test_api_creates_job_and_records_initial_event() -> None:
@@ -24,7 +24,7 @@ def test_api_creates_job_and_records_initial_event() -> None:
 
     response = client.post(
         "/api/jobs",
-        json={"site_key": "site_01", "sim_id": "sim-a", "runtime": "playwright_chromium"},
+        json={"site_key": "example", "sim_id": "sim-a", "runtime": "playwright_chromium"},
     )
 
     assert response.status_code == 201
@@ -55,7 +55,7 @@ def test_cancel_queued_job_moves_it_to_cancelled() -> None:
     app = create_app(settings=settings, repository=repo, start_runner=False)
     client = TestClient(app)
 
-    created = client.post("/api/jobs", json={"site_key": "site_01", "sim_id": "sim-a"}).json()
+    created = client.post("/api/jobs", json={"site_key": "example", "sim_id": "sim-a"}).json()
 
     response = client.post(f"/api/jobs/{created['id']}/cancel")
 
@@ -84,7 +84,7 @@ def test_resume_endpoint_is_ok_for_existing_job() -> None:
     )
     client = TestClient(app)
 
-    created = client.post("/api/jobs", json={"site_key": "site_01", "sim_id": "sim-a"}).json()
+    created = client.post("/api/jobs", json={"site_key": "example", "sim_id": "sim-a"}).json()
 
     resp = client.post(f"/api/jobs/{created['id']}/resume")
     assert resp.status_code == 200
@@ -108,7 +108,7 @@ def test_checkpoint_endpoint_returns_none_when_idle() -> None:
         settings=Settings(database_backend="memory"), repository=repo, start_runner=False
     )
     client = TestClient(app)
-    created = client.post("/api/jobs", json={"site_key": "site_01", "sim_id": "sim-a"}).json()
+    created = client.post("/api/jobs", json={"site_key": "example", "sim_id": "sim-a"}).json()
 
     resp = client.get(f"/api/jobs/{created['id']}/checkpoint")
     assert resp.status_code == 200
@@ -121,13 +121,51 @@ def test_pause_running_job_moves_to_waiting_human() -> None:
         settings=Settings(database_backend="memory"), repository=repo, start_runner=False
     )
     client = TestClient(app)
-    created = client.post("/api/jobs", json={"site_key": "site_01", "sim_id": "sim-a"}).json()
+    created = client.post("/api/jobs", json={"site_key": "example", "sim_id": "sim-a"}).json()
 
-    # placeholder to ensure the job exists; this also exercises the existing cancel path
+    # Cancel the first job (a terminal state) to exercise the cancel path.
     client.post(f"/api/jobs/{created['id']}/cancel")
-    # The job is now CANCELLED (terminal) from the line above, so use a fresh job instead.
-    fresh = client.post("/api/jobs", json={"site_key": "site_02", "sim_id": "sim-a"}).json()
     # Pause on a QUEUED job is a no-op (not RUNNING) and must still return 200 with paused True.
+    fresh = client.post("/api/jobs", json={"site_key": "example", "sim_id": "sim-a"}).json()
     resp = client.post(f"/api/jobs/{fresh['id']}/pause")
     assert resp.status_code == 200
     assert resp.json()["paused"] is True
+
+
+def test_site_crud_api_and_example_is_protected() -> None:
+    repo = MemoryRepository()
+    app = create_app(settings=Settings(database_backend="memory"), repository=repo,
+                     start_runner=False)
+    client = TestClient(app)
+
+    listed = client.get("/api/sites").json()
+    assert any(s["key"] == "example" and s["has_code_adapter"] for s in listed)
+
+    created = client.post(
+        "/api/sites",
+        json={"key": "acme", "display_name": "Acme", "base_url": "https://acme.test/signup"},
+    )
+    assert created.status_code == 201
+    assert created.json()["has_code_adapter"] is False
+
+    patched = client.patch("/api/sites/acme", json={"enabled": False})
+    assert patched.status_code == 200
+    assert patched.json()["enabled"] is False
+
+    # the example site is backed by a code adapter and may not be deleted
+    protected = client.delete("/api/sites/example")
+    assert protected.status_code == 409
+
+    deleted = client.delete("/api/sites/acme")
+    assert deleted.status_code == 200
+    assert all(s["key"] != "acme" for s in client.get("/api/sites").json())
+
+
+def test_create_job_rejects_unknown_site() -> None:
+    repo = MemoryRepository()
+    app = create_app(settings=Settings(database_backend="memory"), repository=repo,
+                     start_runner=False)
+    client = TestClient(app)
+
+    resp = client.post("/api/jobs", json={"site_key": "nope", "sim_id": "sim-a"})
+    assert resp.status_code == 404

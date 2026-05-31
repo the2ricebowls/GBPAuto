@@ -13,6 +13,9 @@ from account_automation_lab.models import (
     ProfileGroup,
     ProfileGroupCreate,
     ProfileGroupUpdate,
+    SiteCreate,
+    SiteSpec,
+    SiteUpdate,
 )
 
 
@@ -69,3 +72,13 @@ class AutomationRepository(Protocol):
     ) -> ProfileGroup: ...
 
     async def delete_profile_group(self, group_id: str) -> None: ...
+
+    async def list_sites(self) -> list[SiteSpec]: ...
+
+    async def get_site(self, site_key: str) -> SiteSpec | None: ...
+
+    async def create_site(self, payload: SiteCreate) -> SiteSpec: ...
+
+    async def update_site(self, site_key: str, update: SiteUpdate) -> SiteSpec: ...
+
+    async def delete_site(self, site_key: str) -> None: ...

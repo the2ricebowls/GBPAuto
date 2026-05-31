@@ -72,3 +72,37 @@ async def test_memory_repo_group_crud() -> None:
 
     await repo.delete_profile_group(group.id)
     assert await repo.list_profile_groups() == []
+
+
+@pytest.mark.asyncio
+async def test_memory_repo_seeds_example_site_and_supports_site_crud() -> None:
+    from account_automation_lab.models import SiteCreate, SiteUpdate
+
+    repo = MemoryRepository()
+
+    seeded = await repo.list_sites()
+    assert any(s.key == "example" and s.has_code_adapter for s in seeded)
+
+    created = await repo.create_site(
+        SiteCreate(key="acme", display_name="Acme", base_url="https://acme.test/signup")
+    )
+    assert created.key == "acme"
+    assert created.has_code_adapter is False
+
+    updated = await repo.update_site("acme", SiteUpdate(display_name="Acme Inc", enabled=False))
+    assert updated.display_name == "Acme Inc"
+    assert updated.enabled is False
+
+    await repo.delete_site("acme")
+    assert await repo.get_site("acme") is None
+
+
+@pytest.mark.asyncio
+async def test_memory_repo_rejects_duplicate_site_key() -> None:
+    from account_automation_lab.models import SiteCreate
+    from account_automation_lab.repositories.memory import SiteExistsError
+
+    repo = MemoryRepository()
+    await repo.create_site(SiteCreate(key="dup", display_name="Dup", base_url="https://d.test"))
+    with pytest.raises(SiteExistsError):
+        await repo.create_site(SiteCreate(key="dup", display_name="Dup2", base_url="https://d2.test"))

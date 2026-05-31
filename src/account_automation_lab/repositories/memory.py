@@ -14,11 +14,18 @@ from account_automation_lab.models import (
     ProfileGroup,
     ProfileGroupCreate,
     ProfileGroupUpdate,
+    SiteCreate,
+    SiteSpec,
+    SiteUpdate,
     utc_now,
 )
 
 
 class InvalidJobTransitionError(RuntimeError):
+    pass
+
+
+class SiteExistsError(RuntimeError):
     pass
 
 
@@ -28,6 +35,14 @@ class MemoryRepository:
         self._events: dict[str, list[JobEvent]] = defaultdict(list)
         self._profiles: dict[str, BrowserProfile] = {}
         self._groups: dict[str, ProfileGroup] = {}
+        self._sites: dict[str, SiteSpec] = {}
+        self._seed_code_sites()
+
+    def _seed_code_sites(self) -> None:
+        from account_automation_lab.adapters.registry import load_adapters
+
+        for adapter in load_adapters().values():
+            self._sites[adapter.spec.key] = adapter.spec
 
     async def create_job(self, payload: JobCreate) -> JobRecord:
         job = JobRecord(
@@ -147,3 +162,38 @@ class MemoryRepository:
 
     async def delete_profile_group(self, group_id: str) -> None:
         self._groups.pop(group_id, None)
+
+    async def list_sites(self) -> list[SiteSpec]:
+        return sorted(self._sites.values(), key=lambda s: s.key)
+
+    async def get_site(self, site_key: str) -> SiteSpec | None:
+        return self._sites.get(site_key)
+
+    async def create_site(self, payload: SiteCreate) -> SiteSpec:
+        if payload.key in self._sites:
+            raise SiteExistsError(f"Site {payload.key} already exists")
+        spec = SiteSpec(
+            key=payload.key,
+            display_name=payload.display_name,
+            base_url=payload.base_url,
+            description=payload.description,
+            captcha_mode=payload.captcha_mode,
+            otp_sender_hints=tuple(payload.otp_sender_hints),
+            proxy_policy=payload.proxy_policy,
+            has_code_adapter=False,
+            enabled=payload.enabled,
+        )
+        self._sites[spec.key] = spec
+        return spec
+
+    async def update_site(self, site_key: str, update: SiteUpdate) -> SiteSpec:
+        current = self._sites[site_key]
+        changes = update.model_dump(exclude_unset=True)
+        if "otp_sender_hints" in changes and changes["otp_sender_hints"] is not None:
+            changes["otp_sender_hints"] = tuple(changes["otp_sender_hints"])
+        updated = current.model_copy(update=changes)
+        self._sites[site_key] = updated
+        return updated
+
+    async def delete_site(self, site_key: str) -> None:
+        self._sites.pop(site_key, None)

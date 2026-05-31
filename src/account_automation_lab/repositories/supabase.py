@@ -8,6 +8,7 @@ from account_automation_lab.jobs.state import can_transition
 from account_automation_lab.models import (
     BrowserProfile,
     BrowserProfileUpdate,
+    CaptchaMode,
     JobCreate,
     JobEvent,
     JobRecord,
@@ -15,6 +16,10 @@ from account_automation_lab.models import (
     ProfileGroup,
     ProfileGroupCreate,
     ProfileGroupUpdate,
+    ProxyPolicy,
+    SiteCreate,
+    SiteSpec,
+    SiteUpdate,
     utc_now,
 )
 from account_automation_lab.repositories.memory import InvalidJobTransitionError
@@ -24,6 +29,7 @@ AUTOMATION_JOBS_TABLE = "automation_jobs"
 AUTOMATION_JOB_EVENTS_TABLE = "automation_job_events"
 AUTOMATION_PROFILES_TABLE = "automation_profiles"
 AUTOMATION_PROFILE_GROUPS_TABLE = "automation_profile_groups"
+AUTOMATION_SITES_TABLE = "automation_sites"
 
 
 class SupabaseRepository:
@@ -240,5 +246,76 @@ class SupabaseRepository:
             lambda: self._client.table(AUTOMATION_PROFILE_GROUPS_TABLE)
             .delete()
             .eq("id", group_id)
+            .execute()
+        )
+
+    def _site_from_row(self, row: dict[str, Any]) -> SiteSpec:
+        from account_automation_lab.adapters.registry import code_adapter_keys
+
+        key = str(row["key"])
+        hints = row.get("otp_sender_hints") or []
+        return SiteSpec(
+            key=key,
+            display_name=str(row.get("display_name") or key),
+            base_url=str(row.get("base_url") or ""),
+            description=str(row.get("description") or ""),
+            captcha_mode=CaptchaMode(str(row.get("captcha_mode") or "test_key")),
+            otp_sender_hints=tuple(str(hint) for hint in hints),
+            proxy_policy=ProxyPolicy(str(row.get("proxy_policy") or "sticky_profile")),
+            has_code_adapter=key in code_adapter_keys(),
+            enabled=bool(row.get("enabled", True)),
+        )
+
+    async def list_sites(self) -> list[SiteSpec]:
+        result = await asyncio.to_thread(
+            lambda: self._client.table(AUTOMATION_SITES_TABLE).select("*").order("key").execute()
+        )
+        return [self._site_from_row(cast(dict[str, Any], row)) for row in result.data]
+
+    async def get_site(self, site_key: str) -> SiteSpec | None:
+        result = await asyncio.to_thread(
+            lambda: self._client.table(AUTOMATION_SITES_TABLE)
+            .select("*")
+            .eq("key", site_key)
+            .limit(1)
+            .execute()
+        )
+        if not result.data:
+            return None
+        return self._site_from_row(cast(dict[str, Any], result.data[0]))
+
+    async def create_site(self, payload: SiteCreate) -> SiteSpec:
+        row: dict[str, Any] = {
+            "key": payload.key,
+            "display_name": payload.display_name,
+            "base_url": payload.base_url,
+            "description": payload.description,
+            "captcha_mode": payload.captcha_mode.value,
+            "otp_sender_hints": list(payload.otp_sender_hints),
+            "proxy_policy": payload.proxy_policy.value,
+            "enabled": payload.enabled,
+        }
+        result = await asyncio.to_thread(
+            lambda: self._client.table(AUTOMATION_SITES_TABLE).insert(row).execute()
+        )
+        return self._site_from_row(cast(dict[str, Any], result.data[0]))
+
+    async def update_site(self, site_key: str, update: SiteUpdate) -> SiteSpec:
+        changes = update.model_dump(mode="json", exclude_unset=True)
+        result = await asyncio.to_thread(
+            lambda: self._client.table(AUTOMATION_SITES_TABLE)
+            .update(changes)
+            .eq("key", site_key)
+            .execute()
+        )
+        if not result.data:
+            raise KeyError(site_key)
+        return self._site_from_row(cast(dict[str, Any], result.data[0]))
+
+    async def delete_site(self, site_key: str) -> None:
+        await asyncio.to_thread(
+            lambda: self._client.table(AUTOMATION_SITES_TABLE)
+            .delete()
+            .eq("key", site_key)
             .execute()
         )

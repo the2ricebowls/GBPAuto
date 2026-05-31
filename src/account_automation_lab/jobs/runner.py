@@ -150,7 +150,17 @@ class JobRunner:
         job = await self.repository.get_job(job_id)
         if job is None:
             return
-        adapter = adapter_for(job.site_key)
+        site = await self.repository.get_site(job.site_key)
+        try:
+            adapter = adapter_for(job.site_key, site)
+        except KeyError:
+            await self.repository.add_event(
+                job_id,
+                "job.error",
+                f"Unknown site '{job.site_key}' with no code adapter.",
+            )
+            await self._safe_update_status(job_id, JobStatus.FAILED)
+            return
         profile_id = job.profile_id or f"{job.sim_id}:{job.site_key}"
         lock = await self.profile_locks.try_acquire(profile_id)
         if lock is None:

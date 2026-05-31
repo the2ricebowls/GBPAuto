@@ -7,7 +7,6 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
 
-from account_automation_lab.adapters.registry import adapter_for, load_adapters
 from account_automation_lab.browser.profiles import (
     BrowserProfileExistsError,
     BrowserProfileStore,
@@ -34,12 +33,14 @@ from account_automation_lab.models import (
     ProxyAttachRequest,
     ProxyEnsureRequest,
     SecretCheck,
+    SiteCreate,
     SiteSpec,
+    SiteUpdate,
 )
 from account_automation_lab.proxy import ProfileProxyManager, ProxyVNClient, ProxyVNError
 from account_automation_lab.repositories.base import AutomationRepository
 from account_automation_lab.repositories.factory import create_repository
-from account_automation_lab.repositories.memory import InvalidJobTransitionError
+from account_automation_lab.repositories.memory import InvalidJobTransitionError, SiteExistsError
 from account_automation_lab.settings import Settings, get_settings
 
 
@@ -148,7 +149,39 @@ def create_app(
 
     @app.get("/api/sites")
     async def list_sites() -> list[SiteSpec]:
-        return [adapter.spec for adapter in load_adapters().values()]
+        return await repo.list_sites()
+
+    @app.post("/api/sites", status_code=status.HTTP_201_CREATED)
+    async def create_site(payload: SiteCreate) -> SiteSpec:
+        try:
+            return await repo.create_site(payload)
+        except SiteExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/sites/{site_key}")
+    async def get_site(site_key: str) -> SiteSpec:
+        site = await repo.get_site(site_key)
+        if site is None:
+            raise HTTPException(status_code=404, detail="Site not found")
+        return site
+
+    @app.patch("/api/sites/{site_key}")
+    async def update_site(site_key: str, payload: SiteUpdate) -> SiteSpec:
+        try:
+            return await repo.update_site(site_key, payload)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Site not found") from exc
+
+    @app.delete("/api/sites/{site_key}")
+    async def delete_site(site_key: str) -> dict[str, str | bool]:
+        site = await repo.get_site(site_key)
+        if site is not None and site.has_code_adapter:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot delete a site backed by a code adapter; remove its module instead.",
+            )
+        await repo.delete_site(site_key)
+        return {"deleted": True, "site_key": site_key}
 
     @app.get("/api/sims")
     async def list_sims() -> list[dict[str, str]]:
@@ -156,18 +189,20 @@ def create_app(
 
     @app.get("/api/profiles")
     async def list_profiles() -> list[dict[str, Any]]:
+        # Legacy summary kept for compatibility; the profile manager uses
+        # /api/browser-profiles. This now reflects real persisted profiles.
         assignments = {
             assignment.profile_id: assignment
             for assignment in await profile_proxy_manager.list_assignments()
         }
         profiles: list[dict[str, Any]] = []
-        for site_key in load_adapters():
-            profile_id = f"sim-a:{site_key}"
-            assignment = assignments.get(profile_id)
+        for profile in await browser_store.list_profiles():
+            assignment = assignments.get(profile.id)
             profiles.append(
                 {
-                    "id": profile_id,
-                    "site_key": site_key,
+                    "id": profile.id,
+                    "name": profile.name,
+                    "site_key": profile.site_key,
                     "proxy_assigned": assignment is not None,
                     "proxy": assignment.proxy.masked_proxy if assignment else None,
                 }
@@ -312,10 +347,9 @@ def create_app(
 
     @app.post("/api/jobs", status_code=status.HTTP_201_CREATED)
     async def create_job(payload: JobCreate) -> JobRecord:
-        try:
-            site = adapter_for(payload.site_key).spec
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        site = await repo.get_site(payload.site_key)
+        if site is None:
+            raise HTTPException(status_code=404, detail=f"Unknown site: {payload.site_key}")
         if not site.enabled:
             raise HTTPException(status_code=409, detail=f"Site {site.key} is disabled")
         return await repo.create_job(payload)

@@ -68,11 +68,13 @@ class SiteSpec(BaseModel):
     key: str
     display_name: str
     base_url: str
+    description: str = ""
     allowed_host_suffixes: tuple[str, ...] = ("localhost", "127.0.0.1", ".internal", ".test")
     captcha_mode: CaptchaMode = CaptchaMode.TEST_KEY
     otp_sender_hints: tuple[str, ...] = ()
     proxy_policy: ProxyPolicy = ProxyPolicy.STICKY_PROFILE
     default_runtime: RuntimeKind = RuntimeKind.CLOAKBROWSER
+    has_code_adapter: bool = False
     enabled: bool = True
 
     def is_url_allowed(self, url: str) -> bool:
@@ -81,6 +83,27 @@ class SiteSpec(BaseModel):
         if not host:
             return False
         return any(host == suffix or host.endswith(suffix) for suffix in self.allowed_host_suffixes)
+
+
+class SiteCreate(BaseModel):
+    key: str
+    display_name: str
+    base_url: str
+    description: str = ""
+    captcha_mode: CaptchaMode = CaptchaMode.TEST_KEY
+    otp_sender_hints: list[str] = Field(default_factory=list)
+    proxy_policy: ProxyPolicy = ProxyPolicy.STICKY_PROFILE
+    enabled: bool = True
+
+
+class SiteUpdate(BaseModel):
+    display_name: str | None = None
+    base_url: str | None = None
+    description: str | None = None
+    captcha_mode: CaptchaMode | None = None
+    otp_sender_hints: list[str] | None = None
+    proxy_policy: ProxyPolicy | None = None
+    enabled: bool | None = None
 
 
 class JobCreate(BaseModel):

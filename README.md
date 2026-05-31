@@ -56,15 +56,55 @@ Open <http://127.0.0.1:8080>.
 
 ## UI
 
-The NiceGUI dashboard is wired to the same in-process FastAPI state as the API:
+The NiceGUI dashboard is an Industrial-console operator UI (dark, monospace, flat,
+status-colored) wired to the same in-process FastAPI state as the API. Left-nav
+tabs:
 
-- Profiles shows browser profiles, session status, masked proxy, SIM, site, runtime, and tags.
-- Profiles can create profiles, open/stop CloakBrowser sessions, and queue signup jobs for a profile.
+- Profiles is the primary screen: browser profiles with group, tags, status,
+  session, masked proxy, timezone and SIM, plus create/edit/clone/delete and a
+  full fingerprint config dialog. Open/Stop a CloakBrowser session and Run a
+  signup job per profile.
 - Sessions shows active browser contexts.
-- Jobs shows live jobs and selected job events.
-- Jobs can be cancelled from the UI for jobs that are still queued, running, or waiting on CAPTCHA.
-- Proxies shows masked profile-proxy assignments and supports attach, one-day buy, and rotate actions.
+- Jobs queues jobs against a site, shows live jobs and selected job events, and
+  supports Resume / Pause / Cancel. Job and session statuses are color-coded
+  (green running, amber waiting, red failed).
+- Sites manages site records: add / edit / delete / enable. Sites backed by a
+  code adapter are marked `code` and are delete-protected; data-only sites are
+  marked `data`.
+- Proxies shows masked profile-proxy assignments and supports attach, one-day
+  buy, and rotate.
 - Settings shows secret health without exposing secret values.
+
+## Sites
+
+Sites are editable records, not hard-coded modules. Manage them in the Sites tab
+or via the REST API:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/api/sites
+
+Invoke-RestMethod -Method Post `
+  -ContentType 'application/json' `
+  -Body '{"key":"acme","display_name":"Acme","base_url":"https://acme.test/signup"}' `
+  http://127.0.0.1:8080/api/sites
+
+Invoke-RestMethod -Method Patch `
+  -ContentType 'application/json' `
+  -Body '{"enabled":false}' `
+  http://127.0.0.1:8080/api/sites/acme
+
+Invoke-RestMethod -Method Delete http://127.0.0.1:8080/api/sites/acme
+```
+
+There are two kinds of site:
+
+- **Code adapter sites** run a bespoke workflow defined in a Python module under
+  `src/account_automation_lab/adapters/`. The project ships one worked `example`
+  adapter; clone `adapters/example.py` to add a real site. These show as `code`
+  in the UI and cannot be deleted via the API (remove the module instead).
+- **Data-only sites** are added entirely through the UI/API with no code yet.
+  Queuing a job against one opens its `base_url` in the profile's browser and
+  pauses at a human checkpoint so you can drive the signup by hand, then resume.
 
 ## Browser Profile Manager
 

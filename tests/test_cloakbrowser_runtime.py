@@ -18,7 +18,7 @@ from account_automation_lab.settings import Settings
 
 def test_cloakbrowser_is_default_runtime_for_jobs_and_sites() -> None:
     assert JobCreate(site_key="site_01", sim_id="sim-a").runtime == RuntimeKind.CLOAKBROWSER
-    assert adapter_for("site_01").spec.default_runtime == RuntimeKind.CLOAKBROWSER
+    assert adapter_for("example").spec.default_runtime == RuntimeKind.CLOAKBROWSER
 
 
 def test_cloakbrowser_settings_support_local_binary_override() -> None:

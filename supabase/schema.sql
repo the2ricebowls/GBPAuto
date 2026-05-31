@@ -106,6 +106,18 @@ create table if not exists public.automation_sites (
   updated_at timestamptz not null default now()
 );
 
+alter table public.automation_sites
+  add column if not exists description text not null default '';
+
+insert into public.automation_sites (key, display_name, base_url, description)
+  values (
+    'example',
+    'Example Site',
+    'http://localhost:8080/mock/example',
+    'Worked example adapter. Clone its module to add a real site.'
+  )
+  on conflict (key) do nothing;
+
 create table if not exists public.automation_sims (
   id text primary key,
   label text not null,

@@ -94,7 +94,7 @@ async def test_runner_respects_max_site_concurrency(monkeypatch: pytest.MonkeyPa
     repo = MemoryRepository()
     release = asyncio.Event()
 
-    def fake_adapter_for(site_key: str) -> _BlockingAdapter:
+    def fake_adapter_for(site_key: str, spec: object | None = None) -> _BlockingAdapter:
         return _BlockingAdapter(site_key, release)
 
     monkeypatch.setattr(runner_module, "adapter_for", fake_adapter_for)
@@ -134,7 +134,7 @@ async def test_runner_respects_max_site_concurrency(monkeypatch: pytest.MonkeyPa
 async def test_runner_runs_workflow_to_success() -> None:
     repo = MemoryRepository()
     created = await repo.create_job(
-        JobCreate(site_key="site_01", sim_id="sim-a", profile_id="p1")
+        JobCreate(site_key="example", sim_id="sim-a", profile_id="p1")
     )
 
     runner = JobRunner(repository=repo, settings=Settings(max_global_concurrency=1))
