@@ -13,16 +13,21 @@ from account_automation_lab.browser.profiles import (
     BrowserSessionError,
     BrowserSessionManager,
 )
+from account_automation_lab.jobs.runner import JobRunner
 from account_automation_lab.jobs.state import can_transition
 from account_automation_lab.models import (
     BrowserProfile,
     BrowserProfileCreate,
+    BrowserProfileUpdate,
     BrowserSession,
+    FingerprintConfig,
+    FingerprintPlatform,
     JobCreate,
     JobEvent,
     JobRecord,
     JobStatus,
     ProfileGroup,
+    ProfileGroupCreate,
     ProfileProxyAssignment,
     ProxyPolicy,
     RuntimeKind,
@@ -82,8 +87,8 @@ def _browser_profile_rows(
         {
             "id": profile.id,
             "name": profile.name,
-            "sim": profile.sim_id,
-            "site": profile.site_key,
+            "sim": profile.sim_id or "",
+            "site": profile.site_key or "",
             "runtime": profile.runtime.value,
             "session": session_by_profile[profile.id].status.value
             if profile.id in session_by_profile
@@ -205,6 +210,7 @@ def _secret_rows(settings: Settings) -> list[dict[str, str]]:
 def mount_ui(app: FastAPI) -> None:
     repo: AutomationRepository = app.state.repository
     settings: Settings = app.state.settings
+    runner: JobRunner = app.state.runner
     proxy_manager: ProfileProxyManager = app.state.proxy_manager
     proxy_client: Any | None = app.state.proxyvn_client
     browser_store: BrowserProfileStore = app.state.browser_profile_store
@@ -218,6 +224,7 @@ def mount_ui(app: FastAPI) -> None:
     async def cockpit() -> None:
         refresh_lock = asyncio.Lock()
         refresh_again = False
+        editing_profile: dict[str, str] = {"id": ""}
 
         ui.page_title("Account Automation Lab")
         ui.query("body").classes("bg-gray-50 text-gray-900")
@@ -253,17 +260,36 @@ def mount_ui(app: FastAPI) -> None:
                             ui.label(label).classes("text-xs text-gray-500 uppercase")
                             metric_labels[key] = ui.label("0").classes("text-2xl font-semibold")
 
-                ui.label("Browser Profiles").classes("text-xl font-semibold")
+                ui.label("Profile Manager").classes("text-xl font-semibold")
+                with ui.row().classes("w-full items-end gap-3 flex-wrap"):
+                    group_filter = ui.select(
+                        _group_filter_options([]),
+                        value="__all__",
+                        label="Group",
+                        on_change=lambda: refresh_browser_profiles(),
+                    ).classes("w-56")
+                    new_group_input = ui.input("New group").classes("w-48")
+                    ui.button(
+                        "Add group",
+                        icon="create_new_folder",
+                        on_click=lambda: create_group(str(new_group_input.value or "")),
+                    )
+                    ui.button(
+                        "Delete group",
+                        icon="folder_delete",
+                        on_click=lambda: delete_group(str(group_filter.value or "")),
+                    ).props("color=negative")
+
                 browser_profiles_table = ui.table(
                     columns=[
-                        {"name": "id", "label": "Profile", "field": "id"},
                         {"name": "name", "label": "Name", "field": "name"},
-                        {"name": "sim", "label": "SIM", "field": "sim"},
-                        {"name": "site", "label": "Site", "field": "site"},
-                        {"name": "runtime", "label": "Runtime", "field": "runtime"},
+                        {"name": "group", "label": "Group", "field": "group"},
+                        {"name": "tags", "label": "Tags", "field": "tags"},
+                        {"name": "status", "label": "Status", "field": "status"},
                         {"name": "session", "label": "Session", "field": "session"},
                         {"name": "proxy", "label": "Proxy", "field": "proxy"},
-                        {"name": "tags", "label": "Tags", "field": "tags"},
+                        {"name": "timezone", "label": "Timezone", "field": "timezone"},
+                        {"name": "sim", "label": "SIM", "field": "sim"},
                     ],
                     rows=[],
                     row_key="id",
@@ -286,28 +312,59 @@ def mount_ui(app: FastAPI) -> None:
                         icon="smart_toy",
                         on_click=lambda: run_signup(str(selected_profile.value or "")),
                     )
-
-                ui.separator()
-                ui.label("Create Profile").classes("text-lg font-semibold")
-                with ui.row().classes("w-full items-end gap-3 flex-wrap"):
-                    create_sim = ui.input("SIM ID", value="sim-a").classes("w-48")
-                    create_site = ui.select(
-                        site_keys,
-                        value=default_site_key,
-                        label="Site",
-                    ).classes("w-48")
-                    create_name = ui.input("Name").classes("w-64")
-                    create_tags = ui.input("Tags").classes("w-64")
                     ui.button(
-                        "Create",
+                        "Edit",
+                        icon="edit",
+                        on_click=lambda: open_profile_dialog(str(selected_profile.value or "")),
+                    ).props("outline")
+                    ui.button(
+                        "＋ Create profile",
                         icon="add",
-                        on_click=lambda: create_profile(
-                            str(create_sim.value or ""),
-                            str(create_site.value or ""),
-                            str(create_name.value or ""),
-                            str(create_tags.value or ""),
-                        ),
-                    )
+                        on_click=lambda: open_profile_dialog(""),
+                    ).props("color=positive")
+
+                # Reusable create/edit profile config dialog. Inputs are referenced by the
+                # async handlers defined later in cockpit(); lambdas capture them lazily.
+                with ui.dialog() as profile_dialog, ui.card().classes("w-[640px] max-w-full gap-2"):
+                    dlg_title = ui.label("Create profile").classes("text-lg font-semibold")
+                    ui.label("Basic").classes("text-xs text-gray-500 uppercase")
+                    with ui.row().classes("w-full gap-3 flex-wrap"):
+                        dlg_name = ui.input("Name").classes("w-72")
+                        dlg_group = ui.select({"": "(no group)"}, value="", label="Group").classes(
+                            "w-56"
+                        )
+                    with ui.row().classes("w-full gap-3 flex-wrap"):
+                        dlg_tags = ui.input("Tags (comma separated)").classes("w-72")
+                        dlg_sim = ui.input("SIM ID").classes("w-48")
+                        dlg_site = ui.select(
+                            ["", *site_keys], value="", label="Site"
+                        ).classes("w-56")
+                    dlg_startup_url = ui.input("Startup URL").classes("w-full")
+                    dlg_notes = ui.textarea("Notes").classes("w-full")
+                    ui.label("Fingerprint").classes("text-xs text-gray-500 uppercase")
+                    with ui.row().classes("w-full gap-3 flex-wrap"):
+                        dlg_platform = ui.select(
+                            ["windows", "macos"], value="windows", label="Platform"
+                        ).classes("w-40")
+                        dlg_seed = ui.number("Seed (blank = random)").classes("w-48")
+                        dlg_color_scheme = ui.select(
+                            ["", "light", "dark", "no-preference"], value="", label="Color scheme"
+                        ).classes("w-48")
+                    with ui.row().classes("w-full gap-3 flex-wrap"):
+                        dlg_timezone = ui.input("Timezone").classes("w-56")
+                        dlg_locale = ui.input("Locale").classes("w-48")
+                    dlg_user_agent = ui.input("User agent").classes("w-full")
+                    with ui.row().classes("w-full gap-3 flex-wrap items-center"):
+                        dlg_viewport_w = ui.number("Viewport width").classes("w-40")
+                        dlg_viewport_h = ui.number("Viewport height").classes("w-40")
+                        dlg_geoip = ui.switch("GeoIP from proxy")
+                    with ui.row().classes("w-full justify-end gap-2"):
+                        ui.button("Cancel", on_click=profile_dialog.close).props("flat")
+                        ui.button(
+                            "Save",
+                            icon="save",
+                            on_click=lambda: submit_profile_dialog(),
+                        ).props("color=positive")
 
             with ui.tab_panel(sessions_tab):
                 ui.label("Active Browser Sessions").classes("text-xl font-semibold")
@@ -364,6 +421,14 @@ def mount_ui(app: FastAPI) -> None:
                 with ui.row().classes("w-full items-end gap-3 flex-wrap"):
                     job_select = ui.select({}, label="Job").classes("min-w-96")
                     ui.button("Load Events", icon="article", on_click=lambda: refresh_events())
+                    ui.button(
+                        "Resume", icon="play_arrow",
+                        on_click=lambda: resume_job_ui(str(job_select.value or "")),
+                    ).props("color=positive")
+                    ui.button(
+                        "Pause", icon="pause",
+                        on_click=lambda: pause_job_ui(str(job_select.value or "")),
+                    ).props("color=warning")
                     ui.button(
                         "Cancel Job",
                         icon="cancel",
@@ -455,11 +520,36 @@ def mount_ui(app: FastAPI) -> None:
             profiles = await browser_store.list_profiles()
             assignments = await proxy_manager.list_assignments()
             sessions = await browser_sessions.list_sessions()
-            rows = _browser_profile_rows(profiles, assignments, sessions)
+            groups_list = await repo.list_profile_groups()
+            groups_map = {group.id: group.name for group in groups_list}
+
+            selected_group = str(group_filter.value or "__all__")
+            if selected_group == "__none__":
+                visible = [profile for profile in profiles if not profile.group_id]
+            elif selected_group not in ("__all__", "__none__"):
+                visible = [profile for profile in profiles if profile.group_id == selected_group]
+            else:
+                visible = list(profiles)
+
+            rows = _profile_manager_rows(
+                profiles=visible,
+                groups=groups_map,
+                assignments=assignments,
+                sessions=sessions,
+            )
             browser_profiles_table.rows = rows
             browser_profiles_table.update()
+
+            group_options = _group_filter_options(groups_list)
+            group_filter.options = group_options
+            if group_filter.value not in group_options:
+                group_filter.value = "__all__"
+            group_filter.update()
+            dlg_group.options = {"": "(no group)", **{g.id: g.name for g in groups_list}}
+            dlg_group.update()
+
             selected_profile.options = {
-                row["id"]: f'{row["id"]} | {row["session"]} | {row["site"]}' for row in rows
+                row["id"]: f'{row["name"]} | {row["session"]}' for row in rows
             }
             if rows and selected_profile.value not in selected_profile.options:
                 selected_profile.value = rows[0]["id"]
@@ -542,23 +632,148 @@ def mount_ui(app: FastAPI) -> None:
                 return False
             return True
 
-        async def create_profile(sim_id: str, site_key: str, name: str, tags: str) -> None:
-            if not sim_id or not site_key:
-                ui.notify("SIM and site are required", color="negative")
+        async def create_group(name: str) -> None:
+            name = name.strip()
+            if not name:
+                ui.notify("Group name is required", color="negative")
                 return
+            group = await repo.create_profile_group(ProfileGroupCreate(name=name))
+            new_group_input.value = ""
+            new_group_input.update()
+            ui.notify(f"Created group {group.name}", color="positive")
+            await refresh_all()
+
+        async def delete_group(group_id: str) -> None:
+            if group_id in ("", "__all__", "__none__"):
+                ui.notify("Select a real group to delete", color="negative")
+                return
+            await repo.delete_profile_group(group_id)
+            group_filter.value = "__all__"
+            group_filter.update()
+            ui.notify("Group deleted", color="positive")
+            await refresh_all()
+
+        def _reset_profile_dialog() -> None:
+            dlg_name.value = ""
+            dlg_group.value = ""
+            dlg_tags.value = ""
+            dlg_sim.value = ""
+            dlg_site.value = ""
+            dlg_startup_url.value = ""
+            dlg_notes.value = ""
+            dlg_platform.value = "windows"
+            dlg_seed.value = None
+            dlg_color_scheme.value = ""
+            dlg_timezone.value = ""
+            dlg_locale.value = ""
+            dlg_user_agent.value = ""
+            dlg_viewport_w.value = None
+            dlg_viewport_h.value = None
+            dlg_geoip.value = False
+
+        async def open_profile_dialog(profile_id: str) -> None:
+            _reset_profile_dialog()
+            editing_profile["id"] = ""
+            if profile_id:
+                profile = await browser_store.get_profile(profile_id)
+                if profile is None:
+                    ui.notify("Select a profile first", color="negative")
+                    return
+                editing_profile["id"] = profile.id
+                dlg_title.text = "Edit profile"
+                dlg_name.value = profile.name
+                dlg_group.value = profile.group_id or ""
+                dlg_tags.value = ", ".join(profile.tags)
+                dlg_sim.value = profile.sim_id or ""
+                dlg_site.value = profile.site_key or ""
+                dlg_startup_url.value = profile.startup_url or ""
+                dlg_notes.value = profile.notes
+                fingerprint = profile.fingerprint
+                dlg_platform.value = fingerprint.platform.value
+                dlg_seed.value = fingerprint.seed
+                dlg_color_scheme.value = fingerprint.color_scheme or ""
+                dlg_timezone.value = fingerprint.timezone or ""
+                dlg_locale.value = fingerprint.locale or ""
+                dlg_user_agent.value = fingerprint.user_agent or ""
+                if fingerprint.viewport is not None:
+                    dlg_viewport_w.value = fingerprint.viewport.get("width")
+                    dlg_viewport_h.value = fingerprint.viewport.get("height")
+                dlg_geoip.value = fingerprint.geoip_from_proxy
+            else:
+                dlg_title.text = "Create profile"
+            dlg_title.update()
+            profile_dialog.open()
+
+        def _build_fingerprint() -> FingerprintConfig:
+            seed_value = dlg_seed.value
+            seed = int(seed_value) if seed_value not in (None, "") else None
+            width = dlg_viewport_w.value
+            height = dlg_viewport_h.value
+            viewport: dict[str, int] | None = None
+            if width not in (None, "") and height not in (None, ""):
+                viewport = {"width": int(width), "height": int(height)}
+            return FingerprintConfig(
+                platform=FingerprintPlatform(str(dlg_platform.value or "windows")),
+                seed=seed,
+                timezone=str(dlg_timezone.value or "") or None,
+                locale=str(dlg_locale.value or "") or None,
+                color_scheme=str(dlg_color_scheme.value or "") or None,
+                user_agent=str(dlg_user_agent.value or "") or None,
+                viewport=viewport,
+                geoip_from_proxy=bool(dlg_geoip.value),
+            )
+
+        async def submit_profile_dialog() -> None:
+            name = str(dlg_name.value or "").strip()
+            if not name:
+                ui.notify("Name is required", color="negative")
+                return
+            tags = [tag.strip() for tag in str(dlg_tags.value or "").split(",") if tag.strip()]
+            group_id = str(dlg_group.value or "") or None
+            sim_id = str(dlg_sim.value or "") or None
+            site_key = str(dlg_site.value or "") or None
+            startup_url = str(dlg_startup_url.value or "") or None
+            notes = str(dlg_notes.value or "")
+            fingerprint = _build_fingerprint()
+            editing_id = editing_profile["id"]
             try:
-                profile = await browser_store.create_profile(
-                    BrowserProfileCreate(
-                        name=name or None,
-                        sim_id=sim_id,
-                        site_key=site_key,
-                        tags=[tag.strip() for tag in tags.split(",") if tag.strip()],
+                if editing_id:
+                    await browser_store.update_profile(
+                        editing_id,
+                        BrowserProfileUpdate(
+                            name=name,
+                            group_id=group_id,
+                            tags=tags,
+                            notes=notes,
+                            sim_id=sim_id,
+                            site_key=site_key,
+                            startup_url=startup_url,
+                            fingerprint=fingerprint,
+                        ),
                     )
-                )
+                    ui.notify("Profile updated", color="positive")
+                else:
+                    profile = await browser_store.create_profile(
+                        BrowserProfileCreate(
+                            name=name,
+                            group_id=group_id,
+                            tags=tags,
+                            notes=notes,
+                            sim_id=sim_id,
+                            site_key=site_key,
+                            startup_url=startup_url,
+                            fingerprint=fingerprint,
+                        )
+                    )
+                    ui.notify(f"Created profile {profile.name}", color="positive")
             except BrowserProfileExistsError as exc:
                 ui.notify(str(exc), color="negative")
                 return
-            ui.notify(f"Created profile {profile.id}", color="positive")
+            except KeyError:
+                ui.notify("Browser profile not found", color="negative")
+                await refresh_browser_profiles()
+                return
+            profile_dialog.close()
             await refresh_all()
 
         async def open_profile(profile_id: str) -> None:
@@ -604,7 +819,12 @@ def mount_ui(app: FastAPI) -> None:
                 ui.notify("Browser profile not found", color="negative")
                 await refresh_browser_profiles()
                 return
-            await queue_job(profile.site_key, profile.sim_id, profile.runtime.value, profile.id)
+            await queue_job(
+                profile.site_key or "",
+                profile.sim_id or "",
+                profile.runtime.value,
+                profile.id,
+            )
 
         async def queue_job(
             site_key: str,
@@ -653,6 +873,26 @@ def mount_ui(app: FastAPI) -> None:
                 await refresh_all()
                 return
             ui.notify(f"Cancelled job {_short_id(job_id)}", color="positive")
+            await refresh_all()
+
+        async def resume_job_ui(job_id: str) -> None:
+            if not job_id:
+                ui.notify("Select a job first", color="negative")
+                return
+            runner.resume(job_id)
+            ui.notify(f"Resumed {_short_id(job_id)}", color="positive")
+            await refresh_all()
+
+        async def pause_job_ui(job_id: str) -> None:
+            if not job_id:
+                ui.notify("Select a job first", color="negative")
+                return
+            job = await repo.get_job(job_id)
+            if job is not None and job.status == JobStatus.RUNNING:
+                await repo.update_job_status(
+                    job_id, JobStatus.WAITING_HUMAN,
+                    event_type="job.paused", message="Paused by operator",
+                )
             await refresh_all()
 
         async def attach_proxy(profile_id: str, idproxy_value: float | int | None) -> None:
