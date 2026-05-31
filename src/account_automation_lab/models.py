@@ -90,16 +90,6 @@ class JobCreate(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class BrowserProfileCreate(BaseModel):
-    id: str | None = None
-    name: str | None = None
-    sim_id: str
-    site_key: str
-    runtime: RuntimeKind = RuntimeKind.CLOAKBROWSER
-    tags: list[str] = Field(default_factory=list)
-    notes: str = ""
-
-
 class FingerprintConfig(BaseModel):
     platform: FingerprintPlatform = FingerprintPlatform.WINDOWS
     seed: int | None = None
@@ -129,15 +119,45 @@ class ProfileGroupUpdate(BaseModel):
     color: str | None = None
 
 
-class BrowserProfile(BaseModel):
-    id: str
+class BrowserProfileCreate(BaseModel):
+    id: str | None = None
     name: str
-    sim_id: str
-    site_key: str
-    runtime: RuntimeKind = RuntimeKind.CLOAKBROWSER
-    storage_dir: str
+    group_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     notes: str = ""
+    sim_id: str | None = None
+    site_key: str | None = None
+    runtime: RuntimeKind = RuntimeKind.CLOAKBROWSER
+    startup_url: str | None = None
+    fingerprint: FingerprintConfig = Field(default_factory=FingerprintConfig)
+
+
+class BrowserProfileUpdate(BaseModel):
+    name: str | None = None
+    group_id: str | None = None
+    tags: list[str] | None = None
+    notes: str | None = None
+    sim_id: str | None = None
+    site_key: str | None = None
+    runtime: RuntimeKind | None = None
+    startup_url: str | None = None
+    status: ProfileStatus | None = None
+    fingerprint: FingerprintConfig | None = None
+
+
+class BrowserProfile(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    name: str
+    group_id: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    notes: str = ""
+    sim_id: str | None = None
+    site_key: str | None = None
+    runtime: RuntimeKind = RuntimeKind.CLOAKBROWSER
+    storage_dir: str
+    startup_url: str | None = None
+    status: ProfileStatus = ProfileStatus.ACTIVE
+    fingerprint: FingerprintConfig = Field(default_factory=FingerprintConfig)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -153,11 +173,14 @@ class BrowserSession(BaseModel):
 class BrowserProfileView(BaseModel):
     id: str
     name: str
-    sim_id: str
-    site_key: str
+    group_id: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    sim_id: str | None = None
+    site_key: str | None = None
     runtime: RuntimeKind
     storage_dir: str
-    tags: list[str] = Field(default_factory=list)
+    status: ProfileStatus = ProfileStatus.ACTIVE
+    fingerprint: FingerprintConfig = Field(default_factory=FingerprintConfig)
     proxy_assigned: bool = False
     proxy: str | None = None
     session_status: BrowserSessionStatus = BrowserSessionStatus.IDLE
