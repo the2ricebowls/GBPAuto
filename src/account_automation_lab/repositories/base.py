@@ -3,7 +3,17 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Protocol
 
-from account_automation_lab.models import JobCreate, JobEvent, JobRecord, JobStatus
+from account_automation_lab.models import (
+    BrowserProfile,
+    BrowserProfileUpdate,
+    JobCreate,
+    JobEvent,
+    JobRecord,
+    JobStatus,
+    ProfileGroup,
+    ProfileGroupCreate,
+    ProfileGroupUpdate,
+)
 
 
 class AutomationRepository(Protocol):
@@ -37,3 +47,25 @@ class AutomationRepository(Protocol):
         *,
         exclude_sites: Collection[str] = (),
     ) -> JobRecord | None: ...
+
+    async def list_profiles(self) -> list[BrowserProfile]: ...
+
+    async def get_profile(self, profile_id: str) -> BrowserProfile | None: ...
+
+    async def create_profile(self, profile: BrowserProfile) -> BrowserProfile: ...
+
+    async def update_profile(
+        self, profile_id: str, update: BrowserProfileUpdate
+    ) -> BrowserProfile: ...
+
+    async def delete_profile(self, profile_id: str) -> None: ...
+
+    async def list_profile_groups(self) -> list[ProfileGroup]: ...
+
+    async def create_profile_group(self, payload: ProfileGroupCreate) -> ProfileGroup: ...
+
+    async def update_profile_group(
+        self, group_id: str, update: ProfileGroupUpdate
+    ) -> ProfileGroup: ...
+
+    async def delete_profile_group(self, group_id: str) -> None: ...
