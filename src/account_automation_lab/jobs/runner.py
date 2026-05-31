@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
 
 from account_automation_lab.adapters.registry import adapter_for
-from account_automation_lab.models import JobStatus, RegistrationContext
+from account_automation_lab.models import JobStatus
 from account_automation_lab.profiles import ProfileLockRegistry
 from account_automation_lab.repositories.base import AutomationRepository
 from account_automation_lab.repositories.memory import InvalidJobTransitionError
 from account_automation_lab.settings import Settings
+from account_automation_lab.workflows.checkpoints import CheckpointRegistry
+from account_automation_lab.workflows.context import WorkflowContext
+from account_automation_lab.workflows.engine import WorkflowEngine
 
 
 class JobRunner:
@@ -27,10 +31,22 @@ class JobRunner:
         self._site_active: dict[str, int] = {}
         self._claimed_site: dict[str, str] = {}
         self._claim_guard = asyncio.Lock()
+        self.checkpoints = CheckpointRegistry()
+        self.engine = WorkflowEngine()
+        self._page_provider: Callable[[str], Awaitable[Any]] = _null_page_provider
 
     @property
     def is_started(self) -> bool:
         return bool(self._workers) and any(not worker.done() for worker in self._workers)
+
+    def set_page_provider(self, provider: Callable[[str], Awaitable[Any]]) -> None:
+        self._page_provider = provider
+
+    def resume(self, job_id: str) -> None:
+        self.checkpoints.resume(job_id)
+
+    def cancel_checkpoint(self, job_id: str) -> None:
+        self.checkpoints.cancel(job_id)
 
     async def start(self) -> None:
         if self.is_started:
@@ -146,15 +162,16 @@ class JobRunner:
             await self.repository.update_job_status(job_id, JobStatus.FAILED)
             return
         try:
-            context = RegistrationContext(job=job, site=adapter.spec, profile_id=profile_id)
-            result = await adapter.run(context)
-            await self.repository.add_event(
-                job_id,
-                "job.adapter_result",
-                result.message,
-                {"account_identifier": result.account_identifier, "artifacts": result.artifacts},
+            page = await self._page_provider(profile_id)
+            ctx = WorkflowContext(
+                job_id=job_id,
+                profile_id=profile_id,
+                page=page,
+                repo=self.repository,
+                checkpoints=self.checkpoints,
             )
-            await self._safe_update_status(job_id, result.status)
+            steps = adapter.workflow(ctx)
+            await self.engine.run(ctx, steps)
         except Exception as exc:
             await self.repository.add_event(job_id, "job.error", str(exc))
             await self._safe_update_status(job_id, JobStatus.FAILED)
@@ -176,3 +193,12 @@ class JobRunner:
                 "job.status_conflict",
                 f"Skipped transition to {status.value}; job already reached a terminal state.",
             )
+
+
+async def _null_page_provider(_profile_id: str) -> Any:
+    class _NoOpPage:
+        async def goto(self, *_a: Any, **_k: Any) -> None: ...
+        async def fill(self, *_a: Any, **_k: Any) -> None: ...
+        async def click(self, *_a: Any, **_k: Any) -> None: ...
+
+    return _NoOpPage()

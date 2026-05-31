@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from typing import Any
 
 import pytest
 
@@ -79,6 +80,14 @@ class _BlockingAdapter:
         await self._release.wait()
         return RegistrationResult(status=JobStatus.SUCCEEDED, message="done")
 
+    def workflow(self, ctx: object) -> list[Any]:
+        release = self._release
+
+        async def _block(_ctx: object) -> None:
+            await release.wait()
+
+        return [_block]
+
 
 @pytest.mark.asyncio
 async def test_runner_respects_max_site_concurrency(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -119,3 +128,34 @@ async def test_runner_respects_max_site_concurrency(monkeypatch: pytest.MonkeyPa
         assert second_done.status == JobStatus.SUCCEEDED
     finally:
         await runner.stop()
+
+
+@pytest.mark.asyncio
+async def test_runner_runs_workflow_to_success() -> None:
+    repo = MemoryRepository()
+    created = await repo.create_job(
+        JobCreate(site_key="site_01", sim_id="sim-a", profile_id="p1")
+    )
+
+    runner = JobRunner(repository=repo, settings=Settings(max_global_concurrency=1))
+    await runner.start()
+    try:
+        await asyncio.sleep(0.5)
+        job = await repo.get_job(created.id)
+        if job is not None and job.status == JobStatus.RUNNING:
+            await asyncio.sleep(1.0)
+    finally:
+        await runner.stop()
+
+    job = await repo.get_job(created.id)
+    assert job is not None
+    assert job.status == JobStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_runner_resume_is_noop_when_nothing_waits() -> None:
+    repo = MemoryRepository()
+    runner = JobRunner(repository=repo, settings=Settings(max_global_concurrency=1))
+
+    runner.resume("nope")
+    assert runner.checkpoints.current("nope") is None
