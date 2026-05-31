@@ -118,6 +118,13 @@ create table if not exists public.automation_sims (
 create index if not exists automation_sims_phone_normalized_idx
   on public.automation_sims (phone_normalized);
 
+create table if not exists public.automation_profile_groups (
+  id text primary key,
+  name text not null,
+  color text,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists public.automation_profiles (
   id text primary key,
   sim_id text not null references public.automation_sims(id),
@@ -133,6 +140,19 @@ create index if not exists automation_profiles_sim_id_idx
   on public.automation_profiles (sim_id);
 create index if not exists automation_profiles_site_key_idx
   on public.automation_profiles (site_key);
+
+alter table public.automation_profiles
+  add column if not exists name text,
+  add column if not exists group_id text references public.automation_profile_groups(id),
+  add column if not exists tags text[] not null default '{}',
+  add column if not exists notes text not null default '',
+  add column if not exists runtime text not null default 'cloakbrowser',
+  add column if not exists startup_url text,
+  add column if not exists status text not null default 'active',
+  add column if not exists fingerprint jsonb not null default '{}';
+
+alter table public.automation_profiles alter column sim_id drop not null;
+alter table public.automation_profiles alter column site_key drop not null;
 
 create table if not exists public.automation_proxies (
   id uuid primary key default gen_random_uuid(),
@@ -235,6 +255,7 @@ alter table public.otp_messages                disable row level security;
 alter table public.cache_meta                  disable row level security;
 alter table public.automation_sites            disable row level security;
 alter table public.automation_sims             disable row level security;
+alter table public.automation_profile_groups   disable row level security;
 alter table public.automation_profiles         disable row level security;
 alter table public.automation_proxies          disable row level security;
 alter table public.automation_jobs             disable row level security;

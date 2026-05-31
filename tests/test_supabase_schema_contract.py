@@ -24,3 +24,20 @@ def test_shared_schema_namespaces_automation_tables() -> None:
     assert "create table if not exists public.sites" not in schema
     assert "create table if not exists public.sims" not in schema
     assert "create table if not exists public.proxies" not in schema
+
+
+def test_schema_has_profile_groups_and_profile_columns() -> None:
+    schema = Path("supabase/schema.sql").read_text(encoding="utf-8")
+
+    assert "create table if not exists public.automation_profile_groups" in schema
+    for column in (
+        "add column if not exists name",
+        "add column if not exists group_id",
+        "add column if not exists tags",
+        "add column if not exists notes",
+        "add column if not exists runtime",
+        "add column if not exists startup_url",
+        "add column if not exists status",
+        "add column if not exists fingerprint",
+    ):
+        assert column in schema
