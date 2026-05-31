@@ -8,12 +8,16 @@ from account_automation_lab.models import (
     RegistrationResult,
     SiteSpec,
 )
+from account_automation_lab.workflows.context import WorkflowContext
+from account_automation_lab.workflows.steps import Step, click, emit, fill, goto
 
 
 class SiteAdapter(Protocol):
     spec: SiteSpec
 
     async def run(self, context: RegistrationContext) -> RegistrationResult: ...
+
+    def workflow(self, ctx: WorkflowContext) -> list[Step]: ...
 
 
 class MockRegistrationAdapter:
@@ -27,6 +31,14 @@ class MockRegistrationAdapter:
             account_identifier=identifier,
             message=f"Mock registration completed for {self.spec.key}",
         )
+
+    def workflow(self, ctx: WorkflowContext) -> list[Step]:
+        return [
+            goto(self.spec.base_url),
+            fill("#username", f"{ctx.profile_id}@{self.spec.key}.test"),
+            click("#submit"),
+            emit("adapter.mock", f"Mock registration completed for {self.spec.key}"),
+        ]
 
 
 def make_mock_adapter(site_number: int) -> MockRegistrationAdapter:
