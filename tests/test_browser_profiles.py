@@ -13,6 +13,8 @@ from account_automation_lab.browser.profiles import (
 from account_automation_lab.models import (
     BrowserProfileCreate,
     BrowserProfileUpdate,
+    FingerprintConfig,
+    FingerprintPlatform,
     ProxyPolicy,
     RuntimeKind,
 )
@@ -239,3 +241,34 @@ async def test_browser_session_manager_rejects_unknown_profile(tmp_path: Path) -
 
     with pytest.raises(KeyError):
         await manager.open_profile("missing-profile")
+
+
+@pytest.mark.asyncio
+async def test_session_manager_passes_fingerprint_kwargs_to_runtime(tmp_path: Path) -> None:
+    repo = MemoryRepository()
+    store = BrowserProfileStore(storage_root=tmp_path, repository=repo)
+    profile = await store.create_profile(
+        BrowserProfileCreate(
+            name="FP",
+            fingerprint=FingerprintConfig(
+                platform=FingerprintPlatform.MACOS,
+                seed=99,
+                timezone="Asia/Ho_Chi_Minh",
+            ),
+        )
+    )
+    fake_runtime = FakeRuntime()
+    manager = BrowserSessionManager(
+        store=store,
+        settings=Settings(),
+        proxy_manager=ProfileProxyManager(),
+        runtime_factory=lambda _kind, _settings: fake_runtime,
+    )
+
+    await manager.open_profile(profile.id)
+
+    config = fake_runtime.launches[0]
+    assert config.fingerprint_kwargs is not None
+    assert config.fingerprint_kwargs["timezone"] == "Asia/Ho_Chi_Minh"
+    assert "--fingerprint=99" in config.fingerprint_kwargs["args"]
+    assert "--fingerprint-platform=macos" in config.fingerprint_kwargs["args"]

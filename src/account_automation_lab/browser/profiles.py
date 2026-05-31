@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from account_automation_lab.browser.fingerprint import fingerprint_launch_kwargs
 from account_automation_lab.browser.runtime import BrowserProfileConfig, runtime_for
 from account_automation_lab.models import (
     BrowserProfile,
@@ -194,6 +195,8 @@ class BrowserSessionManager:
                 profile_id=profile.id,
                 storage_dir=Path(profile.storage_dir),
                 proxy=assignment.proxy.playwright_proxy if assignment is not None else None,
+                extension_paths=tuple(Path(p) for p in profile.fingerprint.extension_paths),
+                fingerprint_kwargs=fingerprint_launch_kwargs(profile.fingerprint),
             )
             runtime: BrowserRuntime = self.runtime_factory(profile.runtime, self.settings)
             context = await runtime.launch_context(config)
