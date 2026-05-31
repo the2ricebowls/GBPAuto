@@ -50,3 +50,18 @@ def test_shared_otp_rows_match_receiver_phone_sender_and_time() -> None:
     )
 
     assert result == "123456"
+
+
+def test_default_backend_is_supabase() -> None:
+    from account_automation_lab.settings import Settings
+
+    assert Settings().database_backend == "supabase"
+
+
+def test_factory_falls_back_to_memory_when_supabase_unconfigured() -> None:
+    from account_automation_lab.repositories.factory import create_repository
+    from account_automation_lab.repositories.memory import MemoryRepository
+    from account_automation_lab.settings import Settings
+
+    repo = create_repository(Settings(database_backend="supabase", supabase_url=""))
+    assert isinstance(repo, MemoryRepository)

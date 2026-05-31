@@ -9,6 +9,8 @@ def create_repository(settings: Settings) -> AutomationRepository:
     if settings.database_backend == "memory":
         return MemoryRepository()
     if settings.database_backend == "supabase":
+        if not settings.supabase_url or not settings.supabase_service_role_key:
+            return MemoryRepository()
         from account_automation_lab.repositories.supabase import SupabaseRepository
 
         return SupabaseRepository(settings)

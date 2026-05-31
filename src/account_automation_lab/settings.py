@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     public_base_url: str = "http://127.0.0.1:8080"
     allowed_host_suffixes: str = ".internal,.test,localhost,127.0.0.1"
 
-    database_backend: str = "memory"
+    database_backend: str = "supabase"
     supabase_url: str = ""
     supabase_service_role_key: str = ""
 
