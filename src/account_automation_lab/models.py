@@ -48,6 +48,7 @@ class JobStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     WAITING_CAPTCHA = "waiting_captcha"
+    WAITING_HUMAN = "waiting_human"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"

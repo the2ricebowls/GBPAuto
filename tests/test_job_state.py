@@ -15,3 +15,11 @@ def test_job_state_machine_rejects_terminal_restart() -> None:
     assert not can_transition(JobStatus.SUCCEEDED, JobStatus.RUNNING)
     assert not can_transition(JobStatus.FAILED, JobStatus.RUNNING)
     assert not can_transition(JobStatus.CANCELLED, JobStatus.RUNNING)
+
+
+def test_waiting_human_transitions() -> None:
+    assert can_transition(JobStatus.RUNNING, JobStatus.WAITING_HUMAN)
+    assert can_transition(JobStatus.WAITING_HUMAN, JobStatus.RUNNING)
+    assert can_transition(JobStatus.WAITING_HUMAN, JobStatus.FAILED)
+    assert can_transition(JobStatus.WAITING_HUMAN, JobStatus.CANCELLED)
+    assert not can_transition(JobStatus.WAITING_HUMAN, JobStatus.SUCCEEDED)
