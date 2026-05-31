@@ -156,3 +156,28 @@ async def test_playwright_chromium_runtime_stops_driver_when_context_closes(
     await context.close()
 
     assert events == ["playwright.start", "context.close", "playwright.stop"]
+
+
+@pytest.mark.asyncio
+async def test_cloakbrowser_runtime_passes_fingerprint_kwargs(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_launcher(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return "context"
+
+    runtime = CloakBrowserRuntime(Settings(), launcher=fake_launcher)
+    config = BrowserProfileConfig(
+        profile_id="p1",
+        storage_dir=tmp_path / "profile",
+        fingerprint_kwargs={
+            "timezone": "Asia/Ho_Chi_Minh",
+            "locale": "vi-VN",
+            "args": ["--fingerprint=42"],
+        },
+    )
+    await runtime.launch_context(config)
+
+    assert captured["timezone"] == "Asia/Ho_Chi_Minh"
+    assert captured["locale"] == "vi-VN"
+    assert "--fingerprint=42" in cast(list[str], captured["args"])

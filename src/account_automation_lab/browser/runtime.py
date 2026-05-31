@@ -17,6 +17,7 @@ class BrowserProfileConfig:
     storage_dir: Path
     proxy: str | dict[str, str] | None = None
     extension_paths: tuple[Path, ...] = ()
+    fingerprint_kwargs: dict[str, Any] | None = None
 
 
 class BrowserRuntimeError(RuntimeError):
@@ -92,10 +93,15 @@ class CloakBrowserRuntime:
             "humanize": self.settings.cloakbrowser_humanize,
             "extension_paths": [str(path) for path in config.extension_paths],
         }
-        args = _cloakbrowser_args(self.settings)
+        fingerprint_kwargs = dict(config.fingerprint_kwargs or {})
+        fingerprint_args = fingerprint_kwargs.pop("args", [])
+        fingerprint_viewport_set = "viewport" in fingerprint_kwargs
+        launch_kwargs.update(fingerprint_kwargs)
+
+        args = _cloakbrowser_args(self.settings) + list(fingerprint_args)
         if args:
             launch_kwargs["args"] = args
-        if _should_fit_screen(self.settings):
+        if _should_fit_screen(self.settings) and not fingerprint_viewport_set:
             launch_kwargs["viewport"] = None
         return await launcher(**launch_kwargs)
 
