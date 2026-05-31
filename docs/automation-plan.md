@@ -4,11 +4,12 @@ This project implements the approved MVP plan:
 
 - FastAPI API with NiceGUI UI in one process.
 - Async automation core with CloakBrowser as the default profile runtime; plain Playwright Chromium is debug-only.
-- One shared Supabase schema for SMS Forwarder + Account Automation Lab, plus memory backend for local development and tests.
+- One shared Supabase schema for SMS Forwarder + Account Automation Lab (Supabase is the default backend), plus a memory backend fallback for local development and tests.
 - APScheduler plus `asyncio.Queue` job runner with global and per-site concurrency limits.
+- A step-based workflow engine for site adapters, with a `WAITING_HUMAN` state and operator resume/pause/cancel controls.
 - Ten separate site adapter modules with mock-safe defaults.
 - SIM OTP, shared `otp_messages` fallback, ProxyVN profile-proxy manager, and CAPTCHA provider abstractions with provider-backed modes disabled by default.
-- AdsPower-style profile cockpit for opening/stopping CloakBrowser profiles from the web UI.
+- AdsPower-style profile cockpit for managing uuid-keyed, persisted browser profiles (groups, tags, fingerprint) and opening/stopping CloakBrowser sessions from the web UI.
 
 ## Shared Database Decision
 
@@ -17,8 +18,8 @@ There is only one Supabase project. `sms-forwarder` and Account Automation Lab s
 Shared schema tables:
 
 - SMS owns `contacts`, `login_accounts`, `regex_overrides`, `otp_messages`, and `cache_meta`.
-- Automation owns schema for `automation_sites`, `automation_sims`, `automation_profiles`, `automation_proxies`, `automation_jobs`, `automation_job_events`, `automation_accounts`, `automation_job_artifacts`, and `automation_captcha_tasks`.
-- Current MVP persistence is aligned around jobs/events and related automation records. Browser profile records and profile-proxy assignments remain in-process until the browser profile persistence follow-up is implemented.
+- Automation owns schema for `automation_sites`, `automation_sims`, `automation_profile_groups`, `automation_profiles`, `automation_proxies`, `automation_jobs`, `automation_job_events`, `automation_accounts`, `automation_job_artifacts`, and `automation_captcha_tasks`.
+- Supabase is the default backend. Jobs, events, accounts, artifacts, browser profiles, and profile groups are persisted in the shared Supabase database; the factory falls back to the in-memory backend when Supabase credentials are absent or when `DATABASE_BACKEND=memory` is set, so local development and tests stay offline-safe.
 - Automation reads OTP fallback from SMS-owned `otp_messages` by matching `receiver_phone_normalized`, sender hints, and `received_at`.
 
 ## Proxy Profile Mapping
@@ -35,8 +36,8 @@ ProxyVN is the single proxy provider for the MVP. Set `PROXYVN_API_KEY` in `.env
 
 The UI is a backend-first NiceGUI shell mounted into the same FastAPI process:
 
-- Profiles is the primary screen: it shows browser profiles, SIM, site, runtime, proxy, session status, and tags.
-- Profiles can create profiles, open/stop CloakBrowser sessions, and queue signup jobs directly for a profile.
+- Profiles is the primary screen: it shows browser profiles, SIM, site, runtime, proxy, session status, groups, and tags.
+- Profiles can create, edit, clone, and delete profiles, organize them into groups, open/stop CloakBrowser sessions, and queue signup jobs directly for a profile.
 - Sessions shows active browser contexts.
 - Jobs reads the live repository, shows job counts, job rows, and selected job events, and can cancel a selected job that is still queued, running, or waiting on CAPTCHA.
 - Proxies reads the in-process profile-proxy manager and can attach an existing ProxyVN `idproxy`, buy a one-day proxy, or rotate a profile proxy.
@@ -44,10 +45,22 @@ The UI is a backend-first NiceGUI shell mounted into the same FastAPI process:
 
 ## Browser Profile Runtime
 
+The profile manager is implemented and is the primary surface of the app:
+
+- Profiles are **uuid-keyed** and **persisted** in the shared Supabase database (with an in-memory fallback offline). Each profile carries `name`, optional `group_id`, `tags`, `notes`, `sim_id`, `site_key`, `runtime`, `startup_url`, `status`, and a `fingerprint` config.
+- Profiles are manageable from both the UI and the REST API: create, edit, clone, and delete, plus open/close CloakBrowser sessions. Profiles can be organized into **groups** (`automation_profile_groups`) and filtered by **tags**.
+- The `fingerprint` config maps onto CloakBrowser launch options: `platform`→`--fingerprint-platform`, `seed`→`--fingerprint`, plus `timezone`, `locale`, `color_scheme`, `user_agent`, `viewport`, `geoip_from_proxy`→`geoip`, and `extension_paths`.
 - `BrowserProfileStore` seeds one default profile per mock site for `sim-a`.
 - `BrowserSessionManager` keeps one active CloakBrowser context per profile and reuses duplicate open requests instead of launching a second context.
-- Profile storage directories are path-safe and live under `BROWSER_PROFILE_STORAGE_ROOT` (`.profiles` by default).
-- Current MVP stores profile records and profile-proxy assignments in-process; persistent profile metadata should move into the shared Supabase database in the next step. Active browser sessions should stay process-local.
+- Profile storage directories are path-safe and live under `BROWSER_PROFILE_STORAGE_ROOT` (`.profiles` by default). Active browser sessions stay process-local, and raw proxy credentials are never written into profile rows.
+
+## Workflow Engine
+
+The step-based workflow engine is implemented. Site adapters describe their flow as a sequence of primitive steps run by `WorkflowEngine`:
+
+- Primitives: `goto`, `fill`, `click`, `wait_for`, `get_otp`, `wait_for_human`, `read_from`, and `emit`.
+- Jobs support a `WAITING_HUMAN` state with three entry points: a code-initiated `wait_for_human` step, an error path (a raised step pauses the job at `WAITING_HUMAN` instead of failing unless `fail_fast` is set), and operator-initiated pause.
+- Operators drive jobs through `POST /api/jobs/{id}/resume`, `POST /api/jobs/{id}/pause`, `POST /api/jobs/{id}/cancel`, and `GET /api/jobs/{id}/checkpoint`.
 
 ## Runtime Decision
 

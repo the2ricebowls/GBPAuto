@@ -8,11 +8,16 @@ The MVP uses FastAPI, NiceGUI, CloakBrowser with Playwright-compatible async API
 
 Use one shared Supabase project for both `sms-forwarder` and this app:
 
-- Run `supabase/schema.sql` in that single Supabase project.
+- Run `supabase/schema.sql` in that single Supabase project. The script is idempotent and now also creates `automation_profile_groups` plus the extra `automation_profiles` columns (`name`, `group_id`, `tags`, `notes`, `runtime`, `startup_url`, `status`, `fingerprint`).
 - Put the same `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in both apps.
 - `sms-forwarder` writes OTPs into `otp_messages`.
-- Account Automation Lab reads OTP fallback from that same `otp_messages` table. Jobs, events, accounts, artifacts, and CAPTCHA task records can be Supabase-backed through `automation_*` tables.
-- Browser profile records and profile-proxy assignments are in-process for the MVP unless or until the Supabase browser profile persistence follow-up is implemented.
+- Account Automation Lab reads OTP fallback from that same `otp_messages` table. Jobs, events, accounts, artifacts, CAPTCHA task records, browser profiles, and profile groups are Supabase-backed through `automation_*` tables.
+
+### Backend selection
+
+- Supabase is the **default** backend. The repository factory uses Supabase when `DATABASE_BACKEND=supabase` (the default) and both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are present.
+- When those credentials are absent, the factory automatically falls back to the in-memory backend, so the app stays offline-safe out of the box.
+- Set `DATABASE_BACKEND=memory` to force the in-memory backend for offline or dev work. This keeps everything process-local and touches no external services.
 
 ## ProxyVN
 
@@ -61,6 +66,32 @@ The NiceGUI dashboard is wired to the same in-process FastAPI state as the API:
 - Proxies shows masked profile-proxy assignments and supports attach, one-day buy, and rotate actions.
 - Settings shows secret health without exposing secret values.
 
+## Browser Profile Manager
+
+Profiles are the center of the workflow and are managed from the UI or the REST API. Each profile is **uuid-keyed** and **persisted** (in Supabase by default, in memory offline). A profile carries:
+
+- `name`, optional `group_id`, free-form `tags`, and `notes`.
+- `sim_id`, `site_key`, `runtime` (`cloakbrowser` by default), and `startup_url`.
+- A `fingerprint` config (see below) and a stable storage directory under `BROWSER_PROFILE_STORAGE_ROOT` (`.profiles` by default).
+
+You can create, edit, clone, and delete profiles. Cloning copies the profile metadata and fingerprint into a new uuid-keyed profile. Profiles can be organized into **groups** (with an optional color) and filtered by **tags**.
+
+### Fingerprint config
+
+Each profile's `fingerprint` maps onto CloakBrowser launch options:
+
+| Field | Maps to |
+| --- | --- |
+| `platform` | `--fingerprint-platform` (emitted only when it differs from the default) |
+| `seed` | `--fingerprint=<seed>` for deterministic fingerprints |
+| `timezone` | CloakBrowser `timezone` |
+| `locale` | CloakBrowser `locale` |
+| `color_scheme` | CloakBrowser `color_scheme` |
+| `user_agent` | CloakBrowser `user_agent` |
+| `viewport` | CloakBrowser `viewport` (`{width, height}`) |
+| `geoip_from_proxy` | CloakBrowser `geoip` (derive geolocation from the proxy egress) |
+| `extension_paths` | extensions loaded into the profile |
+
 ## Browser Profile API
 
 ```powershell
@@ -73,15 +104,45 @@ Invoke-RestMethod -Method Post `
   -Body '{"sim_id":"sim-b","site_key":"site_02","name":"SIM B / site_02"}' `
   http://127.0.0.1:8080/api/browser-profiles
 
+# Edit a profile (name, group, tags, fingerprint, ...).
+Invoke-RestMethod -Method Patch `
+  -ContentType 'application/json' `
+  -Body '{"tags":["warmup"],"notes":"primary"}' `
+  http://127.0.0.1:8080/api/browser-profiles/<profile-id>
+
+# Clone a profile into a new uuid-keyed profile.
+Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/browser-profiles/<profile-id>/clone
+
+# Delete a profile (optionally remove its storage directory).
+Invoke-RestMethod -Method Delete "http://127.0.0.1:8080/api/browser-profiles/<profile-id>?remove_storage=true"
+
 # Open or stop a CloakBrowser session for one profile.
-Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/browser-profiles/sim-a:site_01/open
-Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/browser-profiles/sim-a:site_01/close
+Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/browser-profiles/<profile-id>/open
+Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/browser-profiles/<profile-id>/close
 
 # List active sessions.
 Invoke-RestMethod http://127.0.0.1:8080/api/browser-sessions
 ```
 
-Profile storage directories live under `BROWSER_PROFILE_STORAGE_ROOT` (`.profiles` by default). Profile rows and profile-proxy assignments are currently in-process for the MVP; the storage directories are stable, and the next persistence step is to back profile metadata with the shared Supabase database without storing raw proxy credentials.
+### Profile groups API
+
+```powershell
+# List or create groups.
+Invoke-RestMethod http://127.0.0.1:8080/api/profile-groups
+Invoke-RestMethod -Method Post `
+  -ContentType 'application/json' `
+  -Body '{"name":"Warmup","color":"#22aa55"}' `
+  http://127.0.0.1:8080/api/profile-groups
+
+# Edit or delete a group.
+Invoke-RestMethod -Method Patch `
+  -ContentType 'application/json' `
+  -Body '{"name":"Warmup A"}' `
+  http://127.0.0.1:8080/api/profile-groups/<group-id>
+Invoke-RestMethod -Method Delete http://127.0.0.1:8080/api/profile-groups/<group-id>
+```
+
+Profile storage directories live under `BROWSER_PROFILE_STORAGE_ROOT` (`.profiles` by default). Profile metadata and profile groups are persisted through the shared Supabase database (or the in-memory backend offline); active browser sessions stay process-local, and raw proxy credentials are never stored in profile rows.
 
 ## Concurrency
 
@@ -91,6 +152,43 @@ The job runner enforces two independent limits:
 - `MAX_SITE_CONCURRENCY` caps how many jobs run at once for a single site. The runner tracks active jobs per site and excludes saturated sites when claiming the next queued job, so a busy site cannot starve others.
 
 Per-profile locks remain in place as well: a profile can only run one job at a time, regardless of the concurrency limits.
+
+## Workflow Engine
+
+Jobs run as ordered sequences of small, composable steps executed by a step-based workflow engine. Site adapters describe their signup flow as a list of primitive steps:
+
+- `goto(url)` — navigate the page.
+- `fill(selector, value)` — type into a field.
+- `click(selector)` — click an element.
+- `wait_for(seconds)` — pause for a fixed delay.
+- `get_otp(sim_id, site_key, ...)` — wait for an OTP (SIM provider with `otp_messages` fallback) and stash it in the workflow context.
+- `wait_for_human(kind, message)` — deliberately hand control to an operator (see below).
+- `read_from(profile_id, reader)` — read a value from another profile's live page (cross-profile reads).
+- `emit(event_type, message, payload)` — record a structured job event.
+
+### Human-in-the-loop
+
+The engine supports a `WAITING_HUMAN` job state with three entry points:
+
+- **Code-initiated wait** — a `wait_for_human` step sets the job to `WAITING_HUMAN` and blocks on a checkpoint until an operator resumes it.
+- **Error → waiting_human** — when a step raises, the engine records a `job.error` event and (unless `fail_fast` is set) pauses the job at `WAITING_HUMAN` instead of failing, so an operator can intervene and resume.
+- **Operator pause** — an operator can pause a running job, inspect it, then resume or cancel.
+
+Job control endpoints:
+
+```powershell
+# Resume a job waiting on a human checkpoint.
+Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/jobs/<job-id>/resume
+
+# Pause a running job for manual intervention.
+Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/jobs/<job-id>/pause
+
+# Cancel a job (queued, running, or waiting).
+Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/jobs/<job-id>/cancel
+
+# Inspect the current human checkpoint for a job.
+Invoke-RestMethod http://127.0.0.1:8080/api/jobs/<job-id>/checkpoint
+```
 
 ## Guardrails
 
