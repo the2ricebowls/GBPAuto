@@ -19,6 +19,7 @@ from account_automation_lab.jobs.state import can_transition
 from account_automation_lab.models import (
     BrowserProfile,
     BrowserProfileCreate,
+    BrowserProfileUpdate,
     BrowserProfileView,
     BrowserSession,
     BrowserSessionStatus,
@@ -26,6 +27,9 @@ from account_automation_lab.models import (
     JobEvent,
     JobRecord,
     JobStatus,
+    ProfileGroup,
+    ProfileGroupCreate,
+    ProfileGroupUpdate,
     ProfileProxyAssignment,
     ProxyAttachRequest,
     ProxyEnsureRequest,
@@ -55,7 +59,7 @@ def create_app(
     proxy_client = proxyvn_client or _create_proxyvn_client(app_settings)
     browser_store = browser_profile_store or BrowserProfileStore(
         storage_root=Path(app_settings.browser_profile_storage_root),
-        site_keys=tuple(load_adapters()),
+        repository=repo,
     )
     browser_sessions = browser_session_manager or BrowserSessionManager(
         store=browser_store,
@@ -171,6 +175,51 @@ def create_app(
             return await browser_store.create_profile(payload)
         except BrowserProfileExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.patch("/api/browser-profiles/{profile_id}")
+    async def update_browser_profile(
+        profile_id: str, payload: BrowserProfileUpdate
+    ) -> BrowserProfile:
+        try:
+            return await browser_store.update_profile(profile_id, payload)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Browser profile not found") from exc
+
+    @app.post("/api/browser-profiles/{profile_id}/clone", status_code=status.HTTP_201_CREATED)
+    async def clone_browser_profile(profile_id: str) -> BrowserProfile:
+        try:
+            return await browser_store.clone_profile(profile_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Browser profile not found") from exc
+
+    @app.delete("/api/browser-profiles/{profile_id}")
+    async def delete_browser_profile(
+        profile_id: str, remove_storage: bool = False
+    ) -> dict[str, str | bool]:
+        await browser_store.delete_profile(profile_id, remove_storage=remove_storage)
+        return {"deleted": True, "profile_id": profile_id}
+
+    @app.get("/api/profile-groups")
+    async def list_profile_groups() -> list[ProfileGroup]:
+        return await repo.list_profile_groups()
+
+    @app.post("/api/profile-groups", status_code=status.HTTP_201_CREATED)
+    async def create_profile_group(payload: ProfileGroupCreate) -> ProfileGroup:
+        return await repo.create_profile_group(payload)
+
+    @app.patch("/api/profile-groups/{group_id}")
+    async def update_profile_group(
+        group_id: str, payload: ProfileGroupUpdate
+    ) -> ProfileGroup:
+        try:
+            return await repo.update_profile_group(group_id, payload)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Group not found") from exc
+
+    @app.delete("/api/profile-groups/{group_id}")
+    async def delete_profile_group(group_id: str) -> dict[str, str | bool]:
+        await repo.delete_profile_group(group_id)
+        return {"deleted": True, "group_id": group_id}
 
     @app.get("/api/browser-sessions")
     async def list_browser_sessions() -> list[BrowserSession]:
