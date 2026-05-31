@@ -53,6 +53,16 @@ class JobStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class FingerprintPlatform(StrEnum):
+    WINDOWS = "windows"
+    MACOS = "macos"
+
+
+class ProfileStatus(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
 class SiteSpec(BaseModel):
     key: str
     display_name: str
@@ -88,6 +98,35 @@ class BrowserProfileCreate(BaseModel):
     runtime: RuntimeKind = RuntimeKind.CLOAKBROWSER
     tags: list[str] = Field(default_factory=list)
     notes: str = ""
+
+
+class FingerprintConfig(BaseModel):
+    platform: FingerprintPlatform = FingerprintPlatform.WINDOWS
+    seed: int | None = None
+    timezone: str | None = None
+    locale: str | None = None
+    color_scheme: str | None = None
+    user_agent: str | None = None
+    viewport: dict[str, int] | None = None
+    geoip_from_proxy: bool = False
+    extension_paths: list[str] = Field(default_factory=list)
+
+
+class ProfileGroup(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    name: str
+    color: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ProfileGroupCreate(BaseModel):
+    name: str
+    color: str | None = None
+
+
+class ProfileGroupUpdate(BaseModel):
+    name: str | None = None
+    color: str | None = None
 
 
 class BrowserProfile(BaseModel):
