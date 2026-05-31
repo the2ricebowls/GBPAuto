@@ -22,6 +22,7 @@ from account_automation_lab.models import (
     JobEvent,
     JobRecord,
     JobStatus,
+    ProfileGroup,
     ProfileProxyAssignment,
     ProxyPolicy,
     RuntimeKind,
@@ -94,6 +95,42 @@ def _browser_profile_rows(
         }
         for profile in sorted(profiles, key=lambda item: item.id)
     ]
+
+
+def _profile_manager_rows(
+    *,
+    profiles: list[BrowserProfile],
+    groups: dict[str, str],
+    assignments: list[ProfileProxyAssignment],
+    sessions: list[BrowserSession],
+) -> list[dict[str, str]]:
+    proxy_by_profile = {a.profile_id: a for a in assignments}
+    session_by_profile = {s.profile_id: s for s in sessions}
+    rows: list[dict[str, str]] = []
+    for profile in sorted(profiles, key=lambda p: p.name.lower()):
+        session = session_by_profile.get(profile.id)
+        assignment = proxy_by_profile.get(profile.id)
+        rows.append(
+            {
+                "id": profile.id,
+                "name": profile.name,
+                "group": groups.get(profile.group_id, "") if profile.group_id else "",
+                "tags": ", ".join(profile.tags),
+                "status": profile.status.value,
+                "session": session.status.value if session is not None else "idle",
+                "proxy": assignment.proxy.masked_proxy if assignment is not None else "",
+                "timezone": profile.fingerprint.timezone or "",
+                "sim": profile.sim_id or "",
+            }
+        )
+    return rows
+
+
+def _group_filter_options(groups: list[ProfileGroup]) -> dict[str, str]:
+    options = {"__all__": "All profiles", "__none__": "Ungrouped"}
+    for group in sorted(groups, key=lambda g: g.name.lower()):
+        options[group.id] = group.name
+    return options
 
 
 def _session_rows(sessions: list[BrowserSession]) -> list[dict[str, str]]:
