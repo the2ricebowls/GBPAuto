@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from account_automation_lab.models import (
-    JobStatus,
-    RegistrationContext,
-    RegistrationResult,
-    SiteSpec,
-)
+from account_automation_lab.models import SiteSpec
 from account_automation_lab.workflows.context import WorkflowContext
-from account_automation_lab.workflows.steps import Step, click, emit, fill, goto
+from account_automation_lab.workflows.steps import Step, click, emit, fill, goto, wait_for_human
 
 
 class SiteAdapter(Protocol):
-    spec: SiteSpec
+    """A site adapter declares its ``spec`` and a step-based ``workflow``.
 
-    async def run(self, context: RegistrationContext) -> RegistrationResult: ...
+    The job runner builds a :class:`WorkflowContext` and runs the returned steps
+    through the workflow engine. To add a real site, copy ``example.py`` and
+    replace the steps with the concrete signup flow.
+    """
+
+    spec: SiteSpec
 
     def workflow(self, ctx: WorkflowContext) -> list[Step]: ...
 
@@ -31,14 +31,6 @@ class ExampleRegistrationAdapter:
 
     def __init__(self, spec: SiteSpec) -> None:
         self.spec = spec
-
-    async def run(self, context: RegistrationContext) -> RegistrationResult:
-        identifier = f"{context.job.sim_id}@{self.spec.key}.test"
-        return RegistrationResult(
-            status=JobStatus.SUCCEEDED,
-            account_identifier=identifier,
-            message=f"Example registration completed for {self.spec.key}",
-        )
 
     def workflow(self, ctx: WorkflowContext) -> list[Step]:
         return [
@@ -60,15 +52,7 @@ class GenericSiteAdapter:
     def __init__(self, spec: SiteSpec) -> None:
         self.spec = spec
 
-    async def run(self, context: RegistrationContext) -> RegistrationResult:
-        return RegistrationResult(
-            status=JobStatus.WAITING_HUMAN,
-            message=f"No code adapter for {self.spec.key}; awaiting manual steps.",
-        )
-
     def workflow(self, ctx: WorkflowContext) -> list[Step]:
-        from account_automation_lab.workflows.steps import wait_for_human
-
         return [
             goto(self.spec.base_url),
             emit(

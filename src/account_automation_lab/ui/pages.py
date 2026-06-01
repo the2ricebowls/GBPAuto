@@ -187,32 +187,6 @@ def _event_rows(events: list[JobEvent]) -> list[dict[str, str]]:
     ]
 
 
-def _browser_profile_rows(
-    profiles: list[BrowserProfile],
-    assignments: list[ProfileProxyAssignment],
-    sessions: list[BrowserSession],
-) -> list[dict[str, str]]:
-    proxy_by_profile = {assignment.profile_id: assignment for assignment in assignments}
-    session_by_profile = {session.profile_id: session for session in sessions}
-    return [
-        {
-            "id": profile.id,
-            "name": profile.name,
-            "sim": profile.sim_id or "",
-            "site": profile.site_key or "",
-            "runtime": profile.runtime.value,
-            "session": session_by_profile[profile.id].status.value
-            if profile.id in session_by_profile
-            else "idle",
-            "proxy": proxy_by_profile[profile.id].proxy.masked_proxy
-            if profile.id in proxy_by_profile
-            else "",
-            "tags": ", ".join(profile.tags),
-        }
-        for profile in sorted(profiles, key=lambda item: item.id)
-    ]
-
-
 def _profile_manager_rows(
     *,
     profiles: list[BrowserProfile],
@@ -607,7 +581,6 @@ def mount_ui(app: FastAPI) -> None:
                         {"name": "proxy", "label": "Proxy", "field": "proxy", "align": "left"},
                         {"name": "enabled", "label": "Enabled", "field": "enabled",
                          "align": "left"},
-                        {"name": "actions", "label": "", "field": "actions", "align": "right"},
                     ],
                     rows=[],
                     row_key="key",
@@ -628,19 +601,16 @@ def mount_ui(app: FastAPI) -> None:
                     </q-td>
                     ''',
                 )
-                sites_table.add_slot(
-                    "body-cell-actions",
-                    r'''
-                    <q-td :props="props" class="text-right">
-                      <q-btn dense flat icon="edit" color="lime"
-                        @click="() => $parent.$emit('edit_site', props.row.key)" />
-                      <q-btn dense flat icon="delete" color="red"
-                        @click="() => $parent.$emit('del_site', props.row.key)" />
-                    </q-td>
-                    ''',
-                )
-                sites_table.on("edit_site", lambda e: open_site_dialog(str(e.args)))
-                sites_table.on("del_site", lambda e: delete_site_ui(str(e.args)))
+                with ui.row().classes("w-full items-end gap-2 flex-wrap mt-2"):
+                    selected_site = ui.select({}, label="Selected site").props(
+                        "dark dense outlined"
+                    ).classes("grow")
+                    ui.button("Edit", icon="edit",
+                              on_click=lambda: open_site_dialog(str(selected_site.value or ""))
+                              ).props("outline dense").style(f"color:{ACCENT}")
+                    ui.button("Delete", icon="delete",
+                              on_click=lambda: delete_site_ui(str(selected_site.value or ""))
+                              ).props("flat dense").style(f"color:{SIGNAL_RED}")
 
             # ======================= PROXIES =========================== #
             with ui.tab_panel(proxies_tab).classes("p-4"):
@@ -864,6 +834,13 @@ def mount_ui(app: FastAPI) -> None:
             if not options:
                 job_site_select.value = None
             job_site_select.update()
+            all_site_options = {s.key: f"{s.key} | {s.display_name}" for s in sites}
+            selected_site.options = all_site_options
+            if all_site_options and selected_site.value not in all_site_options:
+                selected_site.value = next(iter(all_site_options))
+            if not all_site_options:
+                selected_site.value = None
+            selected_site.update()
             pdlg["site"].options = {"": "(none)", **{s.key: s.key for s in sites}}
             pdlg["site"].update()
 

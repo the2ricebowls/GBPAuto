@@ -254,20 +254,6 @@ class OtpMessage(BaseModel):
     received_at: datetime
 
 
-class RegistrationContext(BaseModel):
-    job: JobRecord
-    site: SiteSpec
-    profile_id: str
-    proxy_url: str | None = None
-
-
-class RegistrationResult(BaseModel):
-    status: JobStatus
-    account_identifier: str | None = None
-    message: str
-    artifacts: list[str] = Field(default_factory=list)
-
-
 class ProxyLeaseSummary(BaseModel):
     idproxy: int
     loaiproxy: str

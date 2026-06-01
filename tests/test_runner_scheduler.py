@@ -11,7 +11,6 @@ from account_automation_lab.jobs.runner import JobRunner
 from account_automation_lab.models import (
     JobCreate,
     JobStatus,
-    RegistrationResult,
     SiteSpec,
 )
 from account_automation_lab.repositories.memory import MemoryRepository
@@ -75,10 +74,6 @@ class _BlockingAdapter:
             base_url="http://localhost:8080/mock",
         )
         self._release = release
-
-    async def run(self, _context: object) -> RegistrationResult:
-        await self._release.wait()
-        return RegistrationResult(status=JobStatus.SUCCEEDED, message="done")
 
     def workflow(self, ctx: object) -> list[Any]:
         release = self._release
